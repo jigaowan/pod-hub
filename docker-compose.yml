@@ -1,0 +1,16 @@
+services:
+  pod-hub:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      BASE_URL: http://localhost:8000
+      FETCH_BATCH_SIZE: 10
+      SYNC_INTERVAL: 30
+      MEDIA_DIR: /data/media
+      DATABASE_PATH: /data/db/podhub.db
+      LOG_LEVEL: INFO
+      YTDLP_BIN: yt-dlp
+    volumes:
+      - ./data:/data
+

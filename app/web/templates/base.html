@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Pod Hub{% endblock %}</title>
+    <style>
+      :root {
+        --bg: #f5f1e8;
+        --panel: #fffdf8;
+        --ink: #1f1b16;
+        --muted: #6e6254;
+        --accent: #9d3c1f;
+        --border: #d9cfbf;
+        --ok: #1f6b44;
+        --warn: #9a5c00;
+        --error: #9c2f2f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(157, 60, 31, 0.12), transparent 30%),
+          linear-gradient(180deg, #f7f2e8 0%, var(--bg) 100%);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 32px 20px 48px;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 24px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 2.4rem;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(31, 27, 22, 0.05);
+      }
+      .stack { display: grid; gap: 16px; }
+      .status {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid currentColor;
+        font-size: 0.85rem;
+        text-transform: lowercase;
+      }
+      .status.active, .status.audio_ready { color: var(--ok); }
+      .status.pending_initial_sync, .status.queued, .status.fetching, .status.syncing { color: var(--warn); }
+      .status.error, .status.failed { color: var(--error); }
+      .status.discovered, .status.skipped { color: var(--muted); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+      }
+      .muted { color: var(--muted); }
+      .actions {
+        display: inline-flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .button {
+        display: inline-block;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: var(--accent);
+        color: white;
+      }
+      .button.secondary {
+        background: transparent;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      form { display: grid; gap: 12px; }
+      input[type="text"] {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        font: inherit;
+      }
+      .error-box {
+        border: 1px solid rgba(156, 47, 47, 0.25);
+        background: rgba(156, 47, 47, 0.08);
+        color: var(--error);
+        padding: 12px 14px;
+        border-radius: 12px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+      }
+      code {
+        background: rgba(31, 27, 22, 0.06);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
+

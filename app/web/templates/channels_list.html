@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Channels - Pod Hub{% endblock %}
+{% block content %}
+  <section class="header">
+    <div>
+      <h1>Pod Hub</h1>
+      <p class="muted">已接入频道列表，状态直接来自数据库。</p>
+    </div>
+    <div class="actions">
+      <a class="button" href="/admin/channels/new">新增频道</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>频道</th>
+          <th>Feed</th>
+          <th>状态</th>
+          <th>最近同步</th>
+          <th>最近错误</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for channel in channels %}
+          <tr>
+            <td><a href="/admin/channels/{{ channel.id }}">{{ channel.display_name }}</a></td>
+            <td><a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></td>
+            <td><span class="status {{ channel.status }}">{{ channel.status }}</span></td>
+            <td>{{ channel.last_synced_at or "-" }}</td>
+            <td class="muted">{{ channel.last_error or "-" }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="muted">当前还没有频道，先新增一个 YouTube 频道。</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}
+

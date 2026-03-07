@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ channel.display_name }} - Pod Hub{% endblock %}
+{% block content %}
+  <section class="header">
+    <div>
+      <h1>{{ channel.display_name }}</h1>
+      <p class="muted">固定 feed：<a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/admin/channels">返回列表</a>
+    </div>
+  </section>
+
+  <section class="grid">
+    <article class="panel stack">
+      <strong>频道状态</strong>
+      <span class="status {{ channel.status }}">{{ channel.status }}</span>
+      <div class="muted">来源：{{ channel.source_input }}</div>
+      <div class="muted">最近同步：{{ channel.last_synced_at or "-" }}</div>
+      <div class="muted">最近错误：{{ channel.last_error or "-" }}</div>
+    </article>
+
+    <article class="panel stack">
+      <strong>最近一次同步</strong>
+      {% if sync_run %}
+        <div><span class="status {{ sync_run.status }}">{{ sync_run.status }}</span></div>
+        <div class="muted">开始：{{ sync_run.started_at }}</div>
+        <div class="muted">结束：{{ sync_run.finished_at or "-" }}</div>
+        <div class="muted">新发现：{{ sync_run.discovered_count }}</div>
+        <div class="muted">入队：{{ sync_run.queued_count }}</div>
+        <div class="muted">成功：{{ sync_run.fetched_count }}</div>
+        <div class="muted">失败：{{ sync_run.failed_count }}</div>
+        <div class="muted">错误：{{ sync_run.error_message or "-" }}</div>
+      {% else %}
+        <div class="muted">还没有同步记录。</div>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel" style="margin-top: 16px;">
+    <h2>节目列表</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>标题</th>
+          <th>状态</th>
+          <th>发布时间</th>
+          <th>是否进入 Feed</th>
+          <th>错误</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for episode in episodes %}
+          <tr>
+            <td>{{ episode.id }}</td>
+            <td>{{ episode.title }}</td>
+            <td><span class="status {{ episode.status }}">{{ episode.status }}</span></td>
+            <td>{{ episode.published_at or "-" }}</td>
+            <td>{{ "是" if episode.has_audio else "否" }}</td>
+            <td class="muted">{{ episode.last_error or "-" }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="6" class="muted">首次同步完成后，这里会展示该频道的节目列表。</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}
+
