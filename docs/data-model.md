@@ -153,7 +153,7 @@
 - 频道列表页：按 `created_at DESC` 读取 `channels`。
 - 频道详情页：按 `published_at DESC, id DESC` 读取该频道节目。
 - RSS 生成：只查询 `status = 'audio_ready'` 的节目，并按 `published_at DESC, id DESC` 输出。
-- 历史补抓：查询 `status IN ('discovered', 'failed')` 且 `audio_path IS NULL` 的最旧未完成节目，最多 `FETCH_BATCH_SIZE` 条。
+- 轮询抓取：每个频道每轮最多处理 `FETCH_BATCH_SIZE` 条，优先新发现节目，若仍有余量再按最旧未完成顺序补抓历史节目。
 
 ## URL 稳定性规则
 

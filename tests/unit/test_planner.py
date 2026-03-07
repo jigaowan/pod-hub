@@ -10,6 +10,15 @@ def test_plan_polling_fetches_prioritizes_new_then_backlog() -> None:
     planned = plan_polling_fetches(
         new_candidates=[1, 2],
         backlog_candidates=[3, 4, 5],
-        backlog_batch_size=2,
+        batch_size=3,
     )
-    assert planned == [1, 2, 3, 4]
+    assert planned == [1, 2, 3]
+
+
+def test_plan_polling_fetches_caps_total_batch_size() -> None:
+    planned = plan_polling_fetches(
+        new_candidates=[1, 2, 3, 4],
+        backlog_candidates=[5, 6],
+        batch_size=3,
+    )
+    assert planned == [1, 2, 3]

@@ -124,17 +124,24 @@ class SyncService:
                 )
                 selected_episodes = plan_initial_fetches(candidates, self.settings.fetch_batch_size)
             else:
-                new_candidates = episode_repo.list_new_unfetched_episodes(session, new_episode_ids)
-                backlog_candidates = episode_repo.list_backlog_unfetched_episodes(
+                new_candidates = episode_repo.list_new_unfetched_episodes(
                     session,
-                    channel_id=channel.id,
+                    new_episode_ids,
                     limit=self.settings.fetch_batch_size,
-                    exclude_episode_ids=[episode.id for episode in new_candidates],
                 )
+                remaining_slots = max(self.settings.fetch_batch_size - len(new_candidates), 0)
+                backlog_candidates = []
+                if remaining_slots > 0:
+                    backlog_candidates = episode_repo.list_backlog_unfetched_episodes(
+                        session,
+                        channel_id=channel.id,
+                        limit=remaining_slots,
+                        exclude_episode_ids=[episode.id for episode in new_candidates],
+                    )
                 selected_episodes = plan_polling_fetches(
                     new_candidates=new_candidates,
                     backlog_candidates=backlog_candidates,
-                    backlog_batch_size=self.settings.fetch_batch_size,
+                    batch_size=self.settings.fetch_batch_size,
                 )
 
             for episode in selected_episodes:

@@ -122,6 +122,31 @@
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
+    <script>
+      const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZoneName: "short",
+      });
+
+      for (const element of document.querySelectorAll("[data-local-datetime]")) {
+        const rawValue = element.getAttribute("data-local-datetime");
+        if (!rawValue) {
+          continue;
+        }
+
+        const parsed = new Date(rawValue);
+        if (Number.isNaN(parsed.getTime())) {
+          continue;
+        }
+
+        element.textContent = localDateTimeFormatter.format(parsed);
+      }
+    </script>
   </body>
 </html>
-

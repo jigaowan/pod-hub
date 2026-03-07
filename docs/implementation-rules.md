@@ -9,7 +9,7 @@
 | 变量名 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `BASE_URL` | 是 | 无 | 对外公开访问基地址，必须包含协议与主机 |
-| `FETCH_BATCH_SIZE` | 否 | `10` | 首次接入抓取数量与单轮历史补抓上限 |
+| `FETCH_BATCH_SIZE` | 否 | `3` | 每个频道单轮抓取上限，轮询时按先新后旧使用 |
 | `SYNC_INTERVAL` | 否 | `30` | 轮询周期，单位为分钟 |
 | `MEDIA_DIR` | 否 | `/data/media` | 音频文件根目录 |
 | `DATABASE_PATH` | 否 | `/data/db/podhub.db` | SQLite 文件路径 |

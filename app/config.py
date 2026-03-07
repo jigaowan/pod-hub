@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     base_url: str = Field(alias="BASE_URL")
-    fetch_batch_size: int = Field(default=10, alias="FETCH_BATCH_SIZE")
+    fetch_batch_size: int = Field(default=3, alias="FETCH_BATCH_SIZE")
     sync_interval: int = Field(default=30, alias="SYNC_INTERVAL")
     media_dir: Path = Field(default=Path("/data/media"), alias="MEDIA_DIR")
     database_path: Path = Field(default=Path("/data/db/podhub.db"), alias="DATABASE_PATH")
@@ -55,4 +55,3 @@ def get_settings() -> Settings:
     settings = Settings()
     settings.ensure_runtime_dirs()
     return settings
-

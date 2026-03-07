@@ -16,7 +16,22 @@
       <strong>频道状态</strong>
       <span class="status {{ channel.status }}">{{ channel.status }}</span>
       <div class="muted">来源：{{ channel.source_input }}</div>
-      <div class="muted">最近同步：{{ channel.last_synced_at or "-" }}</div>
+      <div class="muted">
+        下一次自动同步：
+        {% if next_sync_at %}
+          <span data-local-datetime="{{ browser_datetime_iso(next_sync_at) }}">{{ browser_datetime_fallback(next_sync_at) }}</span>
+        {% else %}
+          -
+        {% endif %}
+      </div>
+      <div class="muted">
+        最近同步：
+        {% if channel.last_synced_at %}
+          <span data-local-datetime="{{ browser_datetime_iso(channel.last_synced_at) }}">{{ browser_datetime_fallback(channel.last_synced_at) }}</span>
+        {% else %}
+          -
+        {% endif %}
+      </div>
       <div class="muted">最近错误：{{ channel.last_error or "-" }}</div>
     </article>
 
@@ -24,8 +39,18 @@
       <strong>最近一次同步</strong>
       {% if sync_run %}
         <div><span class="status {{ sync_run.status }}">{{ sync_run.status }}</span></div>
-        <div class="muted">开始：{{ sync_run.started_at }}</div>
-        <div class="muted">结束：{{ sync_run.finished_at or "-" }}</div>
+        <div class="muted">
+          开始：
+          <span data-local-datetime="{{ browser_datetime_iso(sync_run.started_at) }}">{{ browser_datetime_fallback(sync_run.started_at) }}</span>
+        </div>
+        <div class="muted">
+          结束：
+          {% if sync_run.finished_at %}
+            <span data-local-datetime="{{ browser_datetime_iso(sync_run.finished_at) }}">{{ browser_datetime_fallback(sync_run.finished_at) }}</span>
+          {% else %}
+            -
+          {% endif %}
+        </div>
         <div class="muted">新发现：{{ sync_run.discovered_count }}</div>
         <div class="muted">入队：{{ sync_run.queued_count }}</div>
         <div class="muted">成功：{{ sync_run.fetched_count }}</div>
@@ -56,7 +81,13 @@
             <td>{{ episode.id }}</td>
             <td>{{ episode.title }}</td>
             <td><span class="status {{ episode.status }}">{{ episode.status }}</span></td>
-            <td>{{ episode.published_at or "-" }}</td>
+            <td>
+              {% if episode.published_at %}
+                <span data-local-datetime="{{ browser_datetime_iso(episode.published_at) }}">{{ browser_datetime_fallback(episode.published_at) }}</span>
+              {% else %}
+                -
+              {% endif %}
+            </td>
             <td>{{ "是" if episode.has_audio else "否" }}</td>
             <td class="muted">{{ episode.last_error or "-" }}</td>
           </tr>
@@ -69,4 +100,3 @@
     </table>
   </section>
 {% endblock %}
-

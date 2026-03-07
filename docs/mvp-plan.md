@@ -140,7 +140,7 @@ Pod Hub 是一个自托管的 YouTube-to-Podcast 工具，用于将指定 YouTub
 首版至少应支持以下配置项：
 
 - `BASE_URL`：系统对外公开访问的基地址，用于生成 feed 与媒体绝对链接。
-- `FETCH_BATCH_SIZE`：统一控制频道首次接入时抓取的最近节目数量，以及每次定时轮询时补抓的旧节目数量。
+- `FETCH_BATCH_SIZE`：统一控制每个频道单轮抓取上限；首次接入抓最近节目，定时轮询时优先抓新节目，剩余额度再补历史节目。
 - `SYNC_INTERVAL`：定时轮询频道更新的周期。
 - `MEDIA_DIR`：音频文件存储目录。
 - `DATABASE_PATH`：SQLite 数据库文件路径。

@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.common.errors import PodHubError
+from app.common.time import browser_datetime_fallback, browser_datetime_iso
 from app.db.repositories import channels as channel_repo
 from app.db.repositories import episodes as episode_repo
 from app.db.repositories import sync_runs as sync_run_repo
@@ -15,6 +16,20 @@ from app.web.viewmodels.channels import to_channel_list_items, to_episode_items,
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+templates.env.globals["browser_datetime_iso"] = browser_datetime_iso
+templates.env.globals["browser_datetime_fallback"] = browser_datetime_fallback
+
+
+def get_next_sync_at(request: Request):
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        return None
+
+    job = scheduler.get_job("channel-sync")
+    if job is None:
+        return None
+
+    return job.next_run_time
 
 
 @router.get("/admin/channels", response_class=HTMLResponse)
@@ -26,7 +41,11 @@ def list_channels(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             name="channels_list.html",
             request=request,
-            context={"channels": to_channel_list_items(channels), "base_url": request.app.state.settings.base_url},
+            context={
+                "channels": to_channel_list_items(channels),
+                "base_url": request.app.state.settings.base_url,
+                "next_sync_at": get_next_sync_at(request),
+            },
         )
     finally:
         session.close()
@@ -37,7 +56,7 @@ def new_channel_form(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         name="channels_new.html",
         request=request,
-        context={"error": None, "source_input": ""},
+        context={"error": None, "source_input": "", "next_sync_at": get_next_sync_at(request)},
     )
 
 
@@ -54,7 +73,11 @@ def create_channel(request: Request, source_input: str = Form(...)) -> HTMLRespo
         return templates.TemplateResponse(
             name="channels_new.html",
             request=request,
-            context={"error": str(exc), "source_input": source_input},
+            context={
+                "error": str(exc),
+                "source_input": source_input,
+                "next_sync_at": get_next_sync_at(request),
+            },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -78,6 +101,7 @@ def show_channel(request: Request, channel_id: int) -> HTMLResponse:
                 "episodes": to_episode_items(episodes),
                 "sync_run": to_sync_run_summary(latest_sync_run),
                 "base_url": request.app.state.settings.base_url,
+                "next_sync_at": get_next_sync_at(request),
             },
         )
     finally:

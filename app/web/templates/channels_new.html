@@ -20,7 +20,14 @@
       <input id="source_input" name="source_input" type="text" value="{{ source_input }}" placeholder="https://www.youtube.com/@example">
       <button class="button" type="submit">保存频道</button>
     </form>
+    <p class="muted">
+      下一次自动同步：
+      {% if next_sync_at %}
+        <span data-local-datetime="{{ browser_datetime_iso(next_sync_at) }}">{{ browser_datetime_fallback(next_sync_at) }}</span>
+      {% else %}
+        -
+      {% endif %}
+    </p>
     <p class="muted">保存后不会立即触发同步，等待调度器按周期执行首次扫描。</p>
   </section>
 {% endblock %}
-

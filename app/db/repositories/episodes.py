@@ -104,7 +104,7 @@ def list_recent_unfetched_episodes(session: Session, channel_id: int, limit: int
     return list(session.scalars(stmt))
 
 
-def list_new_unfetched_episodes(session: Session, episode_ids: Iterable[int]) -> list[Episode]:
+def list_new_unfetched_episodes(session: Session, episode_ids: Iterable[int], limit: int | None = None) -> list[Episode]:
     ids = list(episode_ids)
     if not ids:
         return []
@@ -119,6 +119,8 @@ def list_new_unfetched_episodes(session: Session, episode_ids: Iterable[int]) ->
         )
         .order_by(order_case)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     return list(session.scalars(stmt))
 
 
@@ -171,4 +173,3 @@ def mark_audio_ready(
     episode.status = "audio_ready"
     episode.last_error = None
     episode.updated_at = now
-

@@ -5,6 +5,14 @@
     <div>
       <h1>Pod Hub</h1>
       <p class="muted">已接入频道列表，状态直接来自数据库。</p>
+      <p class="muted">
+        下一次自动同步：
+        {% if next_sync_at %}
+          <span data-local-datetime="{{ browser_datetime_iso(next_sync_at) }}">{{ browser_datetime_fallback(next_sync_at) }}</span>
+        {% else %}
+          -
+        {% endif %}
+      </p>
     </div>
     <div class="actions">
       <a class="button" href="/admin/channels/new">新增频道</a>
@@ -28,7 +36,13 @@
             <td><a href="/admin/channels/{{ channel.id }}">{{ channel.display_name }}</a></td>
             <td><a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></td>
             <td><span class="status {{ channel.status }}">{{ channel.status }}</span></td>
-            <td>{{ channel.last_synced_at or "-" }}</td>
+            <td>
+              {% if channel.last_synced_at %}
+                <span data-local-datetime="{{ browser_datetime_iso(channel.last_synced_at) }}">{{ browser_datetime_fallback(channel.last_synced_at) }}</span>
+              {% else %}
+                -
+              {% endif %}
+            </td>
             <td class="muted">{{ channel.last_error or "-" }}</td>
           </tr>
         {% else %}
@@ -40,4 +54,3 @@
     </table>
   </section>
 {% endblock %}
-
