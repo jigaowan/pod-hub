@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     ytdlp_bin: str = Field(default="yt-dlp", alias="YTDLP_BIN")
     ytdlp_proxy: str | None = Field(default=None, alias="YTDLP_PROXY")
+    tmp_media_dir: Path = Field(default=Path("/tmp/pod-hub"), alias="TMP_MEDIA_DIR")
 
     @field_validator("base_url")
     @classmethod
@@ -48,10 +49,6 @@ class Settings(BaseSettings):
             return None
         normalized = value.strip()
         return normalized or None
-
-    @property
-    def tmp_media_dir(self) -> Path:
-        return self.media_dir / "_tmp"
 
     def ensure_runtime_dirs(self) -> None:
         self.media_dir.mkdir(parents=True, exist_ok=True)

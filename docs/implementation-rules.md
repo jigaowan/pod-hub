@@ -12,6 +12,7 @@
 | `FETCH_BATCH_SIZE` | 否 | `3` | 每个频道单轮抓取上限，轮询时按先新后旧使用 |
 | `SYNC_INTERVAL` | 否 | `30` | 轮询周期，单位为分钟 |
 | `MEDIA_DIR` | 否 | `/data/media` | 音频文件根目录 |
+| `TMP_MEDIA_DIR` | 否 | `/tmp/pod-hub` | 下载中间文件临时目录 |
 | `DATABASE_PATH` | 否 | `/data/db/podhub.db` | SQLite 文件路径 |
 | `LOG_LEVEL` | 否 | `INFO` | 日志级别 |
 | `YTDLP_BIN` | 否 | `yt-dlp` | `yt-dlp` 可执行文件路径 |
@@ -21,7 +22,7 @@
 - 所有环境变量由单一 `config` 模块读取和校验。
 - `BASE_URL` 不允许以 `/` 结尾，入库和渲染前统一规范化。
 - `FETCH_BATCH_SIZE` 和 `SYNC_INTERVAL` 必须为正整数。
-- 若 `MEDIA_DIR` 或数据库父目录不存在，由应用启动时创建。
+- 若 `MEDIA_DIR`、`TMP_MEDIA_DIR` 或数据库父目录不存在，由应用启动时创建。
 
 ## `yt-dlp` 调用边界
 
@@ -34,7 +35,7 @@
 ## 文件存储规则
 
 - 最终音频文件路径固定为 `MEDIA_DIR/{episode_id}.m4a`。
-- 下载中间文件写入 `MEDIA_DIR/_tmp/{episode_id}/`。
+- 下载中间文件写入 `TMP_MEDIA_DIR/{episode_id}/`。
 - 下载成功后通过原子重命名发布到正式路径。
 - 数据库中的 `audio_path` 保存正式发布路径。
 - 若正式文件已存在，重复抓取前先校验数据库状态；首版不主动覆盖有效音频文件。
