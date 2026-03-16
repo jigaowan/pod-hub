@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from app.common.errors import DownloaderError, SourceResolutionError
+from app.common.media import AUDIO_FILE_EXTENSION, AUDIO_MIME_TYPE
 from app.common.time import parse_upload_date, published_at_from_upload_date
 from app.config import Settings
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio, ResolvedChannel
@@ -92,9 +93,11 @@ class YtDlpClient:
             "download_audio",
             [
                 "--no-playlist",
+                "--format",
+                "m4a/bestaudio/best",
                 "--extract-audio",
                 "--audio-format",
-                "mp3",
+                AUDIO_FILE_EXTENSION,
                 "--audio-quality",
                 "0",
                 "--output",
@@ -104,9 +107,11 @@ class YtDlpClient:
             timeout=3600,
         )
 
-        temp_file_path = temp_dir / "audio.mp3"
+        temp_file_path = temp_dir / f"audio.{AUDIO_FILE_EXTENSION}"
         if not temp_file_path.exists():
-            raise DownloaderError(f"yt-dlp did not produce expected mp3 for episode {episode_id}")
+            raise DownloaderError(
+                f"yt-dlp did not produce expected {AUDIO_FILE_EXTENSION} for episode {episode_id}"
+            )
 
         return FetchedAudio(
             title=metadata.get("title") or str(episode_id),
@@ -115,7 +120,7 @@ class YtDlpClient:
             published_at=published_at_from_upload_date(metadata.get("upload_date")),
             duration_seconds=metadata.get("duration"),
             thumbnail_url=metadata.get("thumbnail"),
-            audio_mime_type="audio/mpeg",
+            audio_mime_type=AUDIO_MIME_TYPE,
             audio_bytes=temp_file_path.stat().st_size,
             temp_file_path=temp_file_path,
         )
@@ -167,4 +172,3 @@ class YtDlpClient:
     def _summarize_error(self, value: str) -> str:
         cleaned = " ".join(value.split())
         return cleaned[:MAX_ERROR_LENGTH]
-

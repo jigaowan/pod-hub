@@ -33,7 +33,7 @@
 
 ## 文件存储规则
 
-- 最终音频文件路径固定为 `MEDIA_DIR/{episode_id}.mp3`。
+- 最终音频文件路径固定为 `MEDIA_DIR/{episode_id}.m4a`。
 - 下载中间文件写入 `MEDIA_DIR/_tmp/{episode_id}/`。
 - 下载成功后通过原子重命名发布到正式路径。
 - 数据库中的 `audio_path` 保存正式发布路径。

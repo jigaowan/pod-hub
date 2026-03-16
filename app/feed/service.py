@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.utils import format_datetime
 from xml.etree import ElementTree as ET
 
+from app.common.media import AUDIO_MIME_TYPE, episode_media_filename
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
@@ -55,11 +56,10 @@ class FeedService:
                 item,
                 "enclosure",
                 {
-                    "url": f"{self.settings.base_url}/media/{episode.id}.mp3",
+                    "url": f"{self.settings.base_url}/media/{episode_media_filename(episode.id)}",
                     "length": str(episode.audio_bytes or 0),
-                    "type": episode.audio_mime_type or "audio/mpeg",
+                    "type": episode.audio_mime_type or AUDIO_MIME_TYPE,
                 },
             )
 
         return ET.tostring(rss, encoding="utf-8", xml_declaration=True).decode("utf-8")
-

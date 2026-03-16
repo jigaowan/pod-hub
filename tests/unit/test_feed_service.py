@@ -42,8 +42,8 @@ def test_feed_service_only_renders_audio_ready_items(tmp_path: Path) -> None:
                     published_at=datetime(2025, 1, 1, tzinfo=UTC),
                     listed_at=datetime.now(UTC),
                     status="audio_ready",
-                    audio_path="/tmp/1.mp3",
-                    audio_mime_type="audio/mpeg",
+                    audio_path="/tmp/1.m4a",
+                    audio_mime_type="audio/mp4",
                     audio_bytes=123,
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
@@ -74,5 +74,5 @@ def test_feed_service_only_renders_audio_ready_items(tmp_path: Path) -> None:
     assert xml is not None
     assert "Ready Episode" in xml
     assert "Discovered Episode" not in xml
-    assert "https://podhub.example.com/media/" in xml
-
+    assert "https://podhub.example.com/media/1.m4a" in xml
+    assert 'type="audio/mp4"' in xml

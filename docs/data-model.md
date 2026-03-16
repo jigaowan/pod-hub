@@ -69,7 +69,7 @@
 | `duration_seconds` | INTEGER | NULL | 音频时长 |
 | `thumbnail_url` | TEXT | NULL | 缩略图地址 |
 | `audio_path` | TEXT | NULL | 本地音频绝对或相对存储路径 |
-| `audio_mime_type` | TEXT | NULL | 默认 `audio/mpeg` |
+| `audio_mime_type` | TEXT | NULL | 默认 `audio/mp4` |
 | `audio_bytes` | INTEGER | NULL | 文件大小，供 RSS enclosure length 使用 |
 | `audio_fetched_at` | DATETIME | NULL | 音频准备完成时间 |
 | `listed_at` | DATETIME | NOT NULL | 首次被发现并入库时间 |

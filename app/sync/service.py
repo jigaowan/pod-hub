@@ -156,7 +156,11 @@ class SyncService:
                     session.commit()
 
                     fetched_audio = self.downloader.fetch_episode_audio(episode.webpage_url, episode.id, temp_dir)
-                    published_path = self.media_store.publish_audio(fetched_audio.temp_file_path, episode.id)
+                    published_path = self.media_store.publish_audio(
+                        fetched_audio.temp_file_path,
+                        channel.slug,
+                        episode.webpage_url,
+                    )
                     episode_repo.mark_audio_ready(
                         episode,
                         fetched_audio,

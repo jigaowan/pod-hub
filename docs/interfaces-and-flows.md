@@ -63,11 +63,11 @@
 
 ### 音频文件
 
-- `GET /media/{episode_id}.mp3`
+- `GET /media/{episode_id}.m4a`
 - 行为：
   - 按 `episode_id` 查找节目
   - 校验节目状态为 `audio_ready`
-  - 返回本地 MP3 文件
+  - 返回本地 M4A 文件
 - 异常：
   - 节目不存在返回 `404`
   - 状态非 `audio_ready` 或文件丢失返回 `404`
@@ -111,7 +111,7 @@
 ## Feed 生成规则
 
 - feed 生成时不读取 `discovered`、`queued`、`fetching`、`failed`、`skipped` 节目。
-- enclosure URL 固定为 `BASE_URL + /media/{episode_id}.mp3`。
+- enclosure URL 固定为 `BASE_URL + /media/{episode_id}.m4a`。
 - 每个条目至少包含标题、描述、发布时间、guid、enclosure。
 - 若频道暂无任何 `audio_ready` 节目，仍输出频道级 RSS 壳，不输出 item。
 

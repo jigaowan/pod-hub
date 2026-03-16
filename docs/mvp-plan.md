@@ -130,7 +130,7 @@ Pod Hub 是一个自托管的 YouTube-to-Podcast 工具，用于将指定 YouTub
 首版需要提供稳定的公开资源路径：
 
 - RSS feed：`/feeds/{channel_slug}.xml`
-- 音频文件：`/media/{episode_id}.mp3`
+- 音频文件：`/media/{episode_id}.m4a`
 - 管理后台：HTTP 页面，至少可完成频道录入、频道列表查看、频道详情与同步状态查看
 
 以上路径可在实现时调整细节，但语义必须保持稳定：每个频道都有固定 feed，每期节目都有固定音频访问 URL。

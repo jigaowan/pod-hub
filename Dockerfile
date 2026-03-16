@@ -22,11 +22,10 @@ COPY docs /app/docs
 
 RUN pip install --upgrade pip \
     && pip install . \
-    && pip install yt-dlp==2024.12.13
+    && pip install yt-dlp==2026.2.4
 
 EXPOSE 8000
 
 VOLUME ["/data"]
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

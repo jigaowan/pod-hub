@@ -66,7 +66,7 @@ def create_channel(request: Request, source_input: str = Form(...)) -> HTMLRespo
     try:
         channel = sync_service.register_channel(source_input)
         return RedirectResponse(
-            url=f"/admin/channels/{channel.id}",
+            url=f"/admin/channels/{channel.slug}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     except PodHubError as exc:
@@ -82,12 +82,12 @@ def create_channel(request: Request, source_input: str = Form(...)) -> HTMLRespo
         )
 
 
-@router.get("/admin/channels/{channel_id}", response_class=HTMLResponse)
-def show_channel(request: Request, channel_id: int) -> HTMLResponse:
+@router.get("/admin/channels/{channel_slug}", response_class=HTMLResponse)
+def show_channel(request: Request, channel_slug: str) -> HTMLResponse:
     session_factory = get_session_factory(request.app.state.settings)
     session = session_factory()
     try:
-        channel = channel_repo.get_channel(session, channel_id)
+        channel = channel_repo.get_channel_by_slug(session, channel_slug)
         if channel is None:
             return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
 

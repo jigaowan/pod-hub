@@ -66,7 +66,7 @@ curl -i http://127.0.0.1:8010/
 curl -i http://127.0.0.1:8010/admin/channels
 curl -i http://127.0.0.1:8010/admin/channels/new
 curl -i http://127.0.0.1:8010/feeds/<channel-slug>.xml
-curl -i http://127.0.0.1:8010/media/<episode-id>.mp3
+curl -i http://127.0.0.1:8010/media/<episode-id>.m4a
 ```
 
 Expected behavior:

@@ -33,7 +33,7 @@
       <tbody>
         {% for channel in channels %}
           <tr>
-            <td><a href="/admin/channels/{{ channel.id }}">{{ channel.display_name }}</a></td>
+            <td><a href="/admin/channels/{{ channel.slug }}">{{ channel.display_name }}</a></td>
             <td><a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></td>
             <td><span class="status {{ channel.status }}">{{ channel.status }}</span></td>
             <td>
