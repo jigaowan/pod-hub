@@ -139,7 +139,10 @@ class YtDlpClient:
             raise DownloaderError(f"yt-dlp returned invalid JSON for {command_type}") from exc
 
     def _run_command(self, command_type: str, extra_args: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
-        command = [self.settings.ytdlp_bin, *extra_args]
+        command = [self.settings.ytdlp_bin]
+        if self.settings.ytdlp_proxy:
+            command.extend(["--proxy", self.settings.ytdlp_proxy])
+        command.extend(extra_args)
         started = time.monotonic()
         completed = subprocess.run(
             command,
@@ -180,11 +183,58 @@ class YtDlpClient:
         return cleaned[:MAX_ERROR_LENGTH]
 
     def _select_cover_url(self, payload: dict) -> str | None:
+        thumbnails = payload.get("thumbnails") or []
+        if thumbnails:
+            selected = self._pick_avatar_thumbnail(thumbnails)
+            if selected:
+                return selected
+
         direct = payload.get("thumbnail")
         if isinstance(direct, str) and direct:
             return direct
 
-        thumbnails = payload.get("thumbnails") or []
+        return self._pick_largest_thumbnail(thumbnails)
+
+    def _pick_avatar_thumbnail(self, thumbnails: list[dict]) -> str | None:
+        squareish: list[dict] = []
+        neutral: list[dict] = []
+
+        for thumb in thumbnails:
+            if not isinstance(thumb, dict):
+                continue
+            url = thumb.get("url")
+            if not url:
+                continue
+            width = thumb.get("width") or 0
+            height = thumb.get("height") or 0
+            preference = thumb.get("preference")
+            ratio = (width / height) if width and height else None
+            if ratio is not None and 0.8 <= ratio <= 1.25:
+                squareish.append(thumb)
+            if preference is None or preference >= 0:
+                neutral.append(thumb)
+
+        if squareish:
+            return self._pick_best_by_preference(squareish)
+        if neutral:
+            return self._pick_best_by_preference(neutral)
+        return None
+
+    def _pick_best_by_preference(self, thumbnails: list[dict]) -> str | None:
+        best = None
+        for thumb in thumbnails:
+            width = thumb.get("width") or 0
+            height = thumb.get("height") or 0
+            area = width * height if width and height else -1
+            preference = thumb.get("preference")
+            score = (preference if isinstance(preference, (int, float)) else 0, area)
+            if best is None or score > best[0]:
+                best = (score, thumb)
+        if best:
+            return best[1].get("url")
+        return None
+
+    def _pick_largest_thumbnail(self, thumbnails: list[dict]) -> str | None:
         best_url = None
         best_area = -1
         for thumb in thumbnails:

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     database_path: Path = Field(default=Path("/data/db/podhub.db"), alias="DATABASE_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     ytdlp_bin: str = Field(default="yt-dlp", alias="YTDLP_BIN")
+    ytdlp_proxy: str | None = Field(default=None, alias="YTDLP_PROXY")
 
     @field_validator("base_url")
     @classmethod
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
         return value.upper()
+
+    @field_validator("ytdlp_proxy")
+    @classmethod
+    def normalize_proxy(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @property
     def tmp_media_dir(self) -> Path:
