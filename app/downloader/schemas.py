@@ -10,6 +10,7 @@ class ResolvedChannel:
     external_channel_id: str
     source_url: str
     display_name: str
+    cover_url: str | None
 
 
 @dataclass(slots=True)
@@ -35,4 +36,3 @@ class FetchedAudio:
     audio_mime_type: str
     audio_bytes: int
     temp_file_path: Path
-

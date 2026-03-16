@@ -42,10 +42,12 @@ class YtDlpClient:
             or external_channel_id
         )
         source_url = payload.get("channel_url") or normalized
+        cover_url = self._select_cover_url(payload)
         return ResolvedChannel(
             external_channel_id=external_channel_id,
             source_url=source_url,
             display_name=display_name,
+            cover_url=cover_url,
         )
 
     def list_channel_episodes(self, source_url: str) -> list[DiscoveredEpisode]:
@@ -172,3 +174,27 @@ class YtDlpClient:
     def _summarize_error(self, value: str) -> str:
         cleaned = " ".join(value.split())
         return cleaned[:MAX_ERROR_LENGTH]
+
+    def _select_cover_url(self, payload: dict) -> str | None:
+        direct = payload.get("thumbnail")
+        if isinstance(direct, str) and direct:
+            return direct
+
+        thumbnails = payload.get("thumbnails") or []
+        best_url = None
+        best_area = -1
+        for thumb in thumbnails:
+            if not isinstance(thumb, dict):
+                continue
+            url = thumb.get("url")
+            if not url:
+                continue
+            width = thumb.get("width") or 0
+            height = thumb.get("height") or 0
+            area = width * height if width and height else -1
+            if area > best_area:
+                best_area = area
+                best_url = url
+            elif best_area < 0:
+                best_url = url
+        return best_url

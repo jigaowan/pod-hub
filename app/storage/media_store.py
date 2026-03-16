@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from app.common.media import episode_storage_filename
 from app.config import Settings
@@ -28,3 +31,40 @@ class MediaStore:
         temp_dir = self.temp_dir_for_episode(episode_id)
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def save_channel_cover(self, cover_url: str, channel_dirname: str) -> Path:
+        channel_dir = self.settings.media_dir / channel_dirname
+        channel_dir.mkdir(parents=True, exist_ok=True)
+
+        existing = next(channel_dir.glob("cover.*"), None)
+        if existing is not None:
+            return existing
+
+        request = Request(cover_url, headers={"User-Agent": "PodHub/0.1"})
+        with urlopen(request, timeout=20) as response:
+            content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            extension = self._infer_cover_extension(cover_url, content_type)
+            final_path = channel_dir / f"cover{extension}"
+
+            with tempfile.NamedTemporaryFile(dir=self.settings.tmp_media_dir, delete=False) as temp_file:
+                shutil.copyfileobj(response, temp_file)
+                temp_path = Path(temp_file.name)
+
+        temp_path.replace(final_path)
+        return final_path
+
+    def _infer_cover_extension(self, cover_url: str, content_type: str) -> str:
+        url_ext = Path(urlparse(cover_url).path).suffix.lower()
+        if url_ext in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+            return ".jpg" if url_ext == ".jpeg" else url_ext
+
+        if content_type == "image/jpeg":
+            return ".jpg"
+        if content_type == "image/png":
+            return ".png"
+        if content_type == "image/webp":
+            return ".webp"
+        if content_type == "image/gif":
+            return ".gif"
+
+        return ".jpg"

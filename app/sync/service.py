@@ -60,6 +60,15 @@ class SyncService:
                 slug=slug,
             )
             session.commit()
+            if resolved.cover_url:
+                try:
+                    self.media_store.save_channel_cover(resolved.cover_url, channel.slug)
+                except Exception:
+                    self.logger.exception(
+                        "channel cover download failed channel_id=%s source_url=%s",
+                        channel.id,
+                        resolved.cover_url,
+                    )
             return channel
         except Exception:
             session.rollback()
