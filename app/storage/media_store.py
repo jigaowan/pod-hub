@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from app.common.media import episode_storage_filename
 from app.config import Settings
 
 
@@ -17,14 +16,11 @@ class MediaStore:
         self.settings = settings
         self.settings.ensure_runtime_dirs()
 
-    def final_path_for_episode(self, channel_dirname: str, webpage_url: str) -> Path:
-        return self.settings.media_dir / channel_dirname / episode_storage_filename(webpage_url)
-
     def temp_dir_for_episode(self, episode_id: int) -> Path:
         return self.settings.tmp_media_dir / str(episode_id)
 
-    def publish_audio(self, temp_file_path: Path, channel_dirname: str, webpage_url: str) -> Path:
-        final_path = self.final_path_for_episode(channel_dirname, webpage_url)
+    def publish_audio(self, temp_file_path: Path, channel_dirname: str) -> Path:
+        final_path = self.settings.media_dir / channel_dirname / temp_file_path.name
         final_path.parent.mkdir(parents=True, exist_ok=True)
         self._publish_temp_file(temp_file_path, final_path)
         return final_path

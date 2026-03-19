@@ -6,14 +6,14 @@
 
 ## 设计原则
 
-- 首版仅支持 YouTube 频道，但保留最小 source 扩展空间。
+- 支持 YouTube 频道与播放列表，并保留最小 source 扩展空间。
 - 公开 URL 必须稳定：频道 feed 依赖不可变 `slug`，媒体 URL 依赖不可变 `episode.id`。
 - 数据库负责保存发现结果、处理状态和最近错误，不保存复杂任务编排状态机。
 - 历史节目可以长期停留在未抓音频状态，但不进入 RSS。
 
 ## 实体总览
 
-- `Channel`：一个被纳管的 YouTube 频道。
+- `Channel`：一个被纳管的 YouTube 频道或播放列表。
 - `Episode`：频道下发现的一期视频节目。
 - `SyncRun`：一次频道同步执行记录。
 - `AppSetting`：少量系统级键值配置或运行标记。
@@ -25,10 +25,10 @@
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `id` | INTEGER | PK | 内部主键 |
-| `source_kind` | TEXT | NOT NULL | 固定为 `youtube_channel`；为未来 source 扩展预留 |
-| `external_channel_id` | TEXT | NOT NULL, UNIQUE | YouTube 频道稳定 ID |
-| `source_input` | TEXT | NOT NULL | 管理员原始输入值，可能是 URL、`@handle` 或频道 ID |
-| `source_url` | TEXT | NOT NULL | 归一化后的频道 URL |
+| `source_kind` | TEXT | NOT NULL | `youtube_channel` 或 `youtube_playlist` |
+| `external_channel_id` | TEXT | NOT NULL, UNIQUE | YouTube 频道或播放列表稳定 ID |
+| `source_input` | TEXT | NOT NULL | 管理员原始输入值，可能是频道 URL、`@handle`、频道 ID 或播放列表 URL |
+| `source_url` | TEXT | NOT NULL | 归一化后的频道或播放列表 URL |
 | `display_name` | TEXT | NOT NULL | 展示名称 |
 | `slug` | TEXT | NOT NULL, UNIQUE | feed 路径标识；创建后不自动变更 |
 | `status` | TEXT | NOT NULL | 见下方枚举 |
@@ -163,6 +163,6 @@
 
 ## 与未来扩展的兼容边界
 
-- 当前只实现 `source_kind = 'youtube_channel'`。
-- `external_channel_id`、`source_input` 和 `source_url` 保留了未来兼容 playlist/source 的空间，但本版不引入多态关联表。
-- 若未来支持 playlist，应新增独立 source 表或扩展 channel/source 拆分，而不是复用 `episodes` 以外的现有状态语义。
+- 当前实现 `source_kind = 'youtube_channel' | 'youtube_playlist'`。
+- `external_channel_id`、`source_input` 和 `source_url` 仍保留未来兼容更多 source 的空间，但本版不引入多态关联表。
+- 若未来支持更多来源，应新增独立 source 表或扩展 channel/source 拆分，而不是复用 `episodes` 以外的现有状态语义。

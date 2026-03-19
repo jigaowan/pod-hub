@@ -5,6 +5,14 @@
     <div>
       <h1>{{ channel.display_name }}</h1>
       <p class="muted">固定 feed：<a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></p>
+      <p class="muted">
+        来源类型：
+        {% if channel.source_kind == "youtube_playlist" %}
+          YouTube 播放列表
+        {% else %}
+          YouTube 频道
+        {% endif %}
+      </p>
     </div>
     <div class="actions">
       <a class="button secondary" href="/admin/channels">返回列表</a>
@@ -13,7 +21,7 @@
 
   <section class="grid">
     <article class="panel stack">
-      <strong>频道状态</strong>
+      <strong>来源状态</strong>
       <span class="status {{ channel.status }}">{{ channel.status }}</span>
       <div class="muted">来源：{{ channel.source_input }}</div>
       <div class="muted">

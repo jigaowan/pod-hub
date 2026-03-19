@@ -4,13 +4,14 @@ import json
 import logging
 import subprocess
 import time
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
 from app.common.errors import DownloaderError, SourceResolutionError
-from app.common.media import AUDIO_FILE_EXTENSION, AUDIO_MIME_TYPE
+from app.common.media import AUDIO_FILE_EXTENSION, AUDIO_MIME_TYPE, episode_storage_filename
 from app.common.time import parse_upload_date, published_at_from_upload_date
 from app.config import Settings
-from app.downloader.schemas import DiscoveredEpisode, FetchedAudio, ResolvedChannel
+from app.downloader.schemas import DiscoveredEpisode, FetchedAudio, ResolvedSource
 
 MAX_ERROR_LENGTH = 4096
 
@@ -20,7 +21,7 @@ class YtDlpClient:
         self.settings = settings
         self.logger = logging.getLogger("podhub.downloader")
 
-    def resolve_channel(self, source_input: str) -> ResolvedChannel:
+    def resolve_channel(self, source_input: str) -> ResolvedSource:
         normalized = self._normalize_source_input(source_input)
         payload = self._run_json(
             "resolve_channel",
@@ -43,9 +44,30 @@ class YtDlpClient:
         )
         source_url = payload.get("channel_url") or normalized
         cover_url = self._select_cover_url(payload)
-        return ResolvedChannel(
-            external_channel_id=external_channel_id,
+        return ResolvedSource(
+            source_kind="youtube_channel",
+            external_id=external_channel_id,
             source_url=source_url,
+            display_name=display_name,
+            cover_url=cover_url,
+        )
+
+    def resolve_playlist(self, source_url: str) -> ResolvedSource:
+        payload = self._run_json(
+            "resolve_playlist",
+            ["--flat-playlist", "--playlist-end", "1", "--dump-single-json", source_url],
+        )
+        playlist_id = payload.get("id") or self._extract_playlist_id_from_input(source_url)
+        if not playlist_id:
+            raise SourceResolutionError("Unable to resolve a stable YouTube playlist id")
+
+        display_name = payload.get("title") or f"Playlist {playlist_id}"
+        resolved_url = payload.get("webpage_url") or source_url
+        cover_url = self._select_cover_url(payload)
+        return ResolvedSource(
+            source_kind="youtube_playlist",
+            external_id=playlist_id,
+            source_url=resolved_url,
             display_name=display_name,
             cover_url=cover_url,
         )
@@ -83,6 +105,39 @@ class YtDlpClient:
             )
         return episodes
 
+    def list_playlist_episodes(self, source_url: str) -> list[DiscoveredEpisode]:
+        payload = self._run_json(
+            "list_playlist",
+            ["--flat-playlist", "--dump-single-json", source_url],
+        )
+        entries = payload.get("entries") or []
+
+        episodes: list[DiscoveredEpisode] = []
+        for entry in entries:
+            source_video_id = entry.get("id")
+            if not source_video_id:
+                continue
+
+            webpage_url = (
+                entry.get("webpage_url")
+                or entry.get("url")
+                or f"https://www.youtube.com/watch?v={source_video_id}"
+            )
+            upload_date = parse_upload_date(entry.get("upload_date"))
+            episodes.append(
+                DiscoveredEpisode(
+                    source_video_id=source_video_id,
+                    webpage_url=webpage_url,
+                    title=entry.get("title") or source_video_id,
+                    description=entry.get("description"),
+                    upload_date=upload_date,
+                    published_at=published_at_from_upload_date(entry.get("upload_date")),
+                    duration_seconds=entry.get("duration"),
+                    thumbnail_url=entry.get("thumbnail"),
+                )
+            )
+        return episodes
+
     def fetch_episode_audio(self, webpage_url: str, episode_id: int, temp_dir: Path) -> FetchedAudio:
         metadata = self._run_json(
             "fetch_metadata",
@@ -90,7 +145,10 @@ class YtDlpClient:
         )
 
         temp_dir.mkdir(parents=True, exist_ok=True)
-        output_template = str(temp_dir / "audio.%(ext)s")
+        # Use the final storage basename while still downloading into the per-episode temp directory.
+        # This keeps file names stable and avoids an extra rename step during publish.
+        storage_filename = episode_storage_filename(webpage_url)
+        output_template = str(temp_dir / f"{Path(storage_filename).stem}.%(ext)s")
         self._run_command(
             "download_audio",
             [
@@ -113,10 +171,10 @@ class YtDlpClient:
             timeout=3600,
         )
 
-        temp_file_path = temp_dir / f"audio.{AUDIO_FILE_EXTENSION}"
+        temp_file_path = temp_dir / storage_filename
         if not temp_file_path.exists():
             raise DownloaderError(
-                f"yt-dlp did not produce expected {AUDIO_FILE_EXTENSION} for episode {episode_id}"
+                f"yt-dlp did not produce expected {storage_filename} for episode {episode_id}"
             )
 
         return FetchedAudio(
@@ -177,6 +235,16 @@ class YtDlpClient:
         if "/channel/" in value:
             return value.rstrip("/").split("/channel/")[-1]
         return None
+
+    def _extract_playlist_id_from_input(self, source_input: str) -> str | None:
+        parsed = urlparse(source_input)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        if not parsed.path.rstrip("/").endswith("/playlist"):
+            return None
+        query = parse_qs(parsed.query)
+        list_ids = query.get("list") or []
+        return list_ids[0] if list_ids else None
 
     def _summarize_error(self, value: str) -> str:
         cleaned = " ".join(value.split())

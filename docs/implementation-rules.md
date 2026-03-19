@@ -34,9 +34,9 @@
 
 ## 文件存储规则
 
-- 最终音频文件路径固定为 `MEDIA_DIR/{episode_id}.m4a`。
-- 下载中间文件写入 `TMP_MEDIA_DIR/{episode_id}/`。
-- 下载成功后通过原子重命名发布到正式路径。
+- 最终音频文件路径固定为 `MEDIA_DIR/{channel_slug}/{video_id}.m4a`（无法提取视频 ID 时回退为 URL 编码文件名）。
+- 下载中间文件写入 `TMP_MEDIA_DIR/{episode_id}/{video_id}.m4a`，文件名与最终发布一致。
+- 下载成功后将中间文件移动到正式路径；若跨文件系统则使用 copy + 原子替换发布。
 - 数据库中的 `audio_path` 保存正式发布路径。
 - 若正式文件已存在，重复抓取前先校验数据库状态；首版不主动覆盖有效音频文件。
 

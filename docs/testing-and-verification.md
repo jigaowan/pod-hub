@@ -93,9 +93,10 @@ Useful checks:
 
 ```sh
 direnv exec . yt-dlp --flat-playlist --playlist-end 1 --dump-single-json https://www.youtube.com/@TED
+direnv exec . yt-dlp --flat-playlist --playlist-end 1 --dump-single-json https://www.youtube.com/playlist?list=PL...
 ```
 
-This confirms that channel resolution is working. Full sync and audio download checks are slower and may take several minutes depending on network conditions and the selected video or channel.
+This confirms that channel/playlist resolution is working. Full sync and audio download checks are slower and may take several minutes depending on network conditions and the selected video or channel.
 
 Notes:
 

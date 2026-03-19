@@ -46,6 +46,7 @@ def allocate_slug(session: Session, display_name: str) -> str:
 def create_channel(
     session: Session,
     *,
+    source_kind: str = "youtube_channel",
     external_channel_id: str,
     source_input: str,
     source_url: str,
@@ -55,7 +56,7 @@ def create_channel(
 ) -> Channel:
     now = utc_now()
     channel = Channel(
-        source_kind="youtube_channel",
+        source_kind=source_kind,
         external_channel_id=external_channel_id,
         source_input=source_input,
         source_url=source_url,
@@ -86,4 +87,3 @@ def mark_sync_failed(channel: Channel, error_message: str) -> None:
     channel.status = "error"
     channel.last_error = error_message
     channel.updated_at = utc_now()
-

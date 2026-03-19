@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
+from app.common.media import episode_storage_filename
 from app.storage.media_store import MediaStore
 
 
@@ -18,7 +19,8 @@ def test_publish_audio_falls_back_on_cross_device_rename(tmp_path: Path, monkeyp
 
     temp_dir = store.temp_dir_for_episode(25)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_file_path = temp_dir / "audio.m4a"
+    webpage_url = "https://www.youtube.com/watch?v=demo"
+    temp_file_path = temp_dir / episode_storage_filename(webpage_url)
     temp_file_path.write_bytes(b"demo-audio")
 
     calls = []
@@ -35,7 +37,6 @@ def test_publish_audio_falls_back_on_cross_device_rename(tmp_path: Path, monkeyp
     final_path = store.publish_audio(
         temp_file_path=temp_file_path,
         channel_dirname="demo-channel",
-        webpage_url="https://www.youtube.com/watch?v=demo",
     )
 
     assert final_path.exists()

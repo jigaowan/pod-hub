@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}New Channel - Pod Hub{% endblock %}
+{% block title %}New Source - Pod Hub{% endblock %}
 {% block content %}
   <section class="header">
     <div>
-      <h1>新增频道</h1>
-      <p class="muted">支持频道 URL、<code>@handle</code> 或频道 ID。</p>
+      <h1>新增来源</h1>
+      <p class="muted">支持频道 URL、<code>@handle</code>、频道 ID，或标准播放列表 URL。</p>
     </div>
     <div class="actions">
       <a class="button secondary" href="/admin/channels">返回列表</a>
@@ -16,9 +16,9 @@
       <div class="error-box">{{ error }}</div>
     {% endif %}
     <form method="post" action="/admin/channels">
-      <label for="source_input">频道标识</label>
-      <input id="source_input" name="source_input" type="text" value="{{ source_input }}" placeholder="https://www.youtube.com/@example">
-      <button class="button" type="submit">保存频道</button>
+      <label for="source_input">来源标识</label>
+      <input id="source_input" name="source_input" type="text" value="{{ source_input }}" placeholder="https://www.youtube.com/playlist?list=PL...">
+      <button class="button" type="submit">保存来源</button>
     </form>
     <p class="muted">
       下一次自动同步：

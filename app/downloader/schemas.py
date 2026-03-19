@@ -6,8 +6,9 @@ from pathlib import Path
 
 
 @dataclass(slots=True)
-class ResolvedChannel:
-    external_channel_id: str
+class ResolvedSource:
+    source_kind: str
+    external_id: str
     source_url: str
     display_name: str
     cover_url: str | None

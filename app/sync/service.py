@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -42,18 +43,19 @@ class SyncService:
         if not cleaned:
             raise ValidationError("source_input is required")
 
-        resolved = self.downloader.resolve_channel(cleaned)
+        resolved = self._resolve_source(cleaned)
 
         session = self.session_factory()
         try:
-            existing = channel_repo.get_channel_by_external_id(session, resolved.external_channel_id)
+            existing = channel_repo.get_channel_by_external_id(session, resolved.external_id)
             if existing is not None:
-                raise ValidationError("This channel is already registered")
+                raise ValidationError("This source is already registered")
 
             slug = channel_repo.allocate_slug(session, resolved.display_name)
             channel = channel_repo.create_channel(
                 session,
-                external_channel_id=resolved.external_channel_id,
+                source_kind=resolved.source_kind,
+                external_channel_id=resolved.external_id,
                 source_input=cleaned,
                 source_url=resolved.source_url,
                 display_name=resolved.display_name,
@@ -117,7 +119,7 @@ class SyncService:
             sync_run = sync_run_repo.create_sync_run(session, channel.id)
             session.commit()
 
-            discovered_entries = self.downloader.list_channel_episodes(channel.source_url)
+            discovered_entries = self._list_source_episodes(channel.source_kind, channel.source_url)
             new_episode_ids = episode_repo.upsert_discovered_episodes(
                 session,
                 channel_id=channel.id,
@@ -168,7 +170,6 @@ class SyncService:
                     published_path = self.media_store.publish_audio(
                         fetched_audio.temp_file_path,
                         channel.slug,
-                        episode.webpage_url,
                     )
                     episode_repo.mark_audio_ready(
                         episode,
@@ -218,3 +219,38 @@ class SyncService:
             self.logger.exception("channel sync failed channel_id=%s", channel_id)
         finally:
             session.close()
+
+    def _resolve_source(self, source_input: str):
+        if self._is_standard_playlist_url(source_input):
+            return self.downloader.resolve_playlist(source_input)
+        if self._has_playlist_param(source_input):
+            raise ValidationError(
+                "Detected a playlist parameter. Please use a standard playlist URL like "
+                "https://www.youtube.com/playlist?list=PL..."
+            )
+        return self.downloader.resolve_channel(source_input)
+
+    def _list_source_episodes(self, source_kind: str, source_url: str):
+        if source_kind == "youtube_playlist":
+            return self.downloader.list_playlist_episodes(source_url)
+        return self.downloader.list_channel_episodes(source_url)
+
+    def _is_standard_playlist_url(self, source_input: str) -> bool:
+        parsed = urlparse(source_input)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        if not parsed.path.rstrip("/").endswith("/playlist"):
+            return False
+        query = parse_qs(parsed.query)
+        list_ids = query.get("list") or []
+        return bool(list_ids and list_ids[0])
+
+    def _has_playlist_param(self, source_input: str) -> bool:
+        parsed = urlparse(source_input)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        if parsed.path.rstrip("/").endswith("/playlist"):
+            return False
+        query = parse_qs(parsed.query)
+        list_ids = query.get("list") or []
+        return bool(list_ids and list_ids[0])

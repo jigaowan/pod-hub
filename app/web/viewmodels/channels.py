@@ -13,6 +13,7 @@ class ChannelListItemView:
     id: int
     display_name: str
     slug: str
+    source_kind: str
     status: str
     last_synced_at: datetime | None
     last_error: str | None
@@ -46,6 +47,7 @@ def to_channel_list_items(channels: list[Channel]) -> list[ChannelListItemView]:
             id=channel.id,
             display_name=channel.display_name,
             slug=channel.slug,
+            source_kind=channel.source_kind,
             status=channel.status,
             last_synced_at=channel.last_synced_at,
             last_error=channel.last_error,
@@ -82,4 +84,3 @@ def to_sync_run_summary(sync_run: SyncRun | None) -> SyncRunSummaryView | None:
         failed_count=sync_run.failed_count,
         error_message=sync_run.error_message,
     )
-

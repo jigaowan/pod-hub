@@ -4,7 +4,7 @@
   <section class="header">
     <div>
       <h1>Pod Hub</h1>
-      <p class="muted">已接入频道列表，状态直接来自数据库。</p>
+      <p class="muted">已接入来源列表，状态直接来自数据库。</p>
       <p class="muted">
         下一次自动同步：
         {% if next_sync_at %}
@@ -15,7 +15,7 @@
       </p>
     </div>
     <div class="actions">
-      <a class="button" href="/admin/channels/new">新增频道</a>
+      <a class="button" href="/admin/channels/new">新增来源</a>
     </div>
   </section>
 
@@ -23,7 +23,8 @@
     <table>
       <thead>
         <tr>
-          <th>频道</th>
+          <th>来源</th>
+          <th>类型</th>
           <th>Feed</th>
           <th>状态</th>
           <th>最近同步</th>
@@ -34,6 +35,13 @@
         {% for channel in channels %}
           <tr>
             <td><a href="/admin/channels/{{ channel.slug }}">{{ channel.display_name }}</a></td>
+            <td>
+              {% if channel.source_kind == "youtube_playlist" %}
+                YouTube 播放列表
+              {% else %}
+                YouTube 频道
+              {% endif %}
+            </td>
             <td><a href="/feeds/{{ channel.slug }}.xml">{{ base_url }}/feeds/{{ channel.slug }}.xml</a></td>
             <td><span class="status {{ channel.status }}">{{ channel.status }}</span></td>
             <td>
@@ -47,7 +55,7 @@
           </tr>
         {% else %}
           <tr>
-            <td colspan="5" class="muted">当前还没有频道，先新增一个 YouTube 频道。</td>
+            <td colspan="6" class="muted">当前还没有来源，先新增一个 YouTube 频道或播放列表。</td>
           </tr>
         {% endfor %}
       </tbody>
