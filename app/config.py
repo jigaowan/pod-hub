@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     ytdlp_bin: str = Field(default="yt-dlp", alias="YTDLP_BIN")
     ytdlp_proxy: str | None = Field(default=None, alias="YTDLP_PROXY")
+    ytdlp_js_runtimes: str | None = Field(default=None, alias="YTDLP_JS_RUNTIMES")
+    ytdlp_socket_timeout: int = Field(default=30, alias="YTDLP_SOCKET_TIMEOUT")
+    ytdlp_retries: int = Field(default=5, alias="YTDLP_RETRIES")
+    ytdlp_fragment_retries: int = Field(default=5, alias="YTDLP_FRAGMENT_RETRIES")
     tmp_media_dir: Path = Field(default=Path("/tmp/pod-hub"), alias="TMP_MEDIA_DIR")
 
     @field_validator("base_url")
@@ -37,6 +41,13 @@ class Settings(BaseSettings):
             raise ValueError("value must be a positive integer")
         return value
 
+    @field_validator("ytdlp_socket_timeout", "ytdlp_retries", "ytdlp_fragment_retries")
+    @classmethod
+    def validate_non_negative_int(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("value must be a non-negative integer")
+        return value
+
     @field_validator("log_level")
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
@@ -45,6 +56,14 @@ class Settings(BaseSettings):
     @field_validator("ytdlp_proxy")
     @classmethod
     def normalize_proxy(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("ytdlp_js_runtimes")
+    @classmethod
+    def normalize_js_runtimes(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()

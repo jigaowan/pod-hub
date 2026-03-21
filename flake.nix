@@ -33,6 +33,7 @@
               python.pkgs.setuptools
               python.pkgs.wheel
               pkgs.ffmpeg
+              pkgs.nodejs
               pkgs.sqlite
               pkgs.yt-dlp
             ];

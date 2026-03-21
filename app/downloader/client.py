@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import time
+import shutil
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
@@ -149,29 +150,61 @@ class YtDlpClient:
         # This keeps file names stable and avoids an extra rename step during publish.
         storage_filename = episode_storage_filename(webpage_url)
         output_template = str(temp_dir / f"{Path(storage_filename).stem}.%(ext)s")
-        self._run_command(
-            "download_audio",
-            [
-                "--no-playlist",
-                "--format",
-                "m4a/bestaudio/best",
-                "--extract-audio",
-                "--audio-format",
-                AUDIO_FILE_EXTENSION,
-                "--audio-quality",
-                "0",
-                "--add-metadata",
-                "--embed-thumbnail",
-                "--convert-thumbnails",
-                "jpg",
-                "--output",
-                output_template,
-                webpage_url,
-            ],
-            timeout=3600,
-        )
-
         temp_file_path = temp_dir / storage_filename
+        download_args = [
+            "--no-playlist",
+            "--format",
+            "m4a/bestaudio/best",
+            "--extract-audio",
+            "--audio-format",
+            AUDIO_FILE_EXTENSION,
+            "--audio-quality",
+            "0",
+            "--add-metadata",
+            "--embed-thumbnail",
+            "--convert-thumbnails",
+            "jpg",
+            "--output",
+            output_template,
+            webpage_url,
+        ]
+        try:
+            self._run_command("download_audio", download_args, timeout=3600)
+        except DownloaderError as exc:
+            if temp_file_path.exists() and temp_file_path.stat().st_size >= 16 * 1024:
+                self.logger.warning(
+                    "yt-dlp download_audio returned failure but output exists; proceeding episode_id=%s url=%s error=%s",
+                    episode_id,
+                    webpage_url,
+                    exc,
+                )
+            else:
+                combined = f"{getattr(exc, 'stderr', '')}\n{getattr(exc, 'stdout', '')}"
+                if self._looks_like_thumbnail_or_embed_failure(combined):
+                    self.logger.warning(
+                        "yt-dlp download_audio failed during thumbnail/embed; retrying without thumbnail episode_id=%s url=%s error=%s",
+                        episode_id,
+                        webpage_url,
+                        exc,
+                    )
+                    retry_args = [
+                        "--no-playlist",
+                        "--format",
+                        "m4a/bestaudio/best",
+                        "--extract-audio",
+                        "--audio-format",
+                        AUDIO_FILE_EXTENSION,
+                        "--audio-quality",
+                        "0",
+                        "--add-metadata",
+                        "--output",
+                        output_template,
+                        webpage_url,
+                    ]
+                    self._run_command("download_audio_no_thumbnail", retry_args, timeout=3600)
+                else:
+                    raise
+
         if not temp_file_path.exists():
             raise DownloaderError(
                 f"yt-dlp did not produce expected {storage_filename} for episode {episode_id}"
@@ -200,6 +233,15 @@ class YtDlpClient:
         command = [self.settings.ytdlp_bin]
         if self.settings.ytdlp_proxy:
             command.extend(["--proxy", self.settings.ytdlp_proxy])
+        js_runtimes = self._select_js_runtimes()
+        if js_runtimes:
+            command.extend(["--js-runtimes", js_runtimes])
+        if self.settings.ytdlp_socket_timeout:
+            command.extend(["--socket-timeout", str(self.settings.ytdlp_socket_timeout)])
+        if self.settings.ytdlp_retries:
+            command.extend(["--retries", str(self.settings.ytdlp_retries)])
+        if self.settings.ytdlp_fragment_retries:
+            command.extend(["--fragment-retries", str(self.settings.ytdlp_fragment_retries)])
         command.extend(extra_args)
         started = time.monotonic()
         completed = subprocess.run(
@@ -214,7 +256,11 @@ class YtDlpClient:
 
         if completed.returncode != 0:
             stderr = self._summarize_error(completed.stderr or completed.stdout)
-            raise DownloaderError(f"{command_type} failed: {stderr}")
+            error = DownloaderError(f"{command_type} failed: {stderr}")
+            error.stdout = completed.stdout
+            error.stderr = completed.stderr
+            error.returncode = completed.returncode
+            raise error
 
         return completed
 
@@ -249,6 +295,31 @@ class YtDlpClient:
     def _summarize_error(self, value: str) -> str:
         cleaned = " ".join(value.split())
         return cleaned[:MAX_ERROR_LENGTH]
+
+    def _select_js_runtimes(self) -> str | None:
+        override = self.settings.ytdlp_js_runtimes
+        if override:
+            return override
+
+        # yt-dlp defaults to enabling only deno, but node is often available in our runtime images.
+        for runtime in ("node", "deno", "bun"):
+            if shutil.which(runtime):
+                return runtime
+        return None
+
+    def _looks_like_thumbnail_or_embed_failure(self, stderr: str) -> bool:
+        lowered = (stderr or "").lower()
+        patterns = (
+            "unable to download video thumbnail",
+            "unable to download thumbnail",
+            "unable to embed using ffprobe",
+            "unable to embed thumbnail",
+            "convert thumbnails",
+            "conversion failed",
+            "ssl.c:993",
+            "handshake operation timed out",
+        )
+        return any(pattern in lowered for pattern in patterns)
 
     def _select_cover_url(self, payload: dict) -> str | None:
         thumbnails = payload.get("thumbnails") or []

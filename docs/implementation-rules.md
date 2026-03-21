@@ -16,6 +16,11 @@
 | `DATABASE_PATH` | 否 | `/data/db/podhub.db` | SQLite 文件路径 |
 | `LOG_LEVEL` | 否 | `INFO` | 日志级别 |
 | `YTDLP_BIN` | 否 | `yt-dlp` | `yt-dlp` 可执行文件路径 |
+| `YTDLP_PROXY` | 否 | 无 | 传给 `yt-dlp --proxy` 的代理配置 |
+| `YTDLP_JS_RUNTIMES` | 否 | 无 | 传给 `yt-dlp --js-runtimes` 的值（例如 `node` 或 `deno`） |
+| `YTDLP_SOCKET_TIMEOUT` | 否 | `30` | `yt-dlp --socket-timeout`，缓解缩略图/TLS 握手超时 |
+| `YTDLP_RETRIES` | 否 | `5` | `yt-dlp --retries` |
+| `YTDLP_FRAGMENT_RETRIES` | 否 | `5` | `yt-dlp --fragment-retries` |
 
 ## 配置规则
 
