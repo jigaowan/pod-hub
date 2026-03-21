@@ -69,6 +69,81 @@ def test_register_playlist_source_kind(tmp_path: Path) -> None:
         assert stored is not None
         assert stored.source_kind == "youtube_playlist"
         assert stored.external_channel_id == "PL123"
+        assert stored.slug == "demo-playlist"
+
+
+def test_register_playlist_uses_unicode_slug(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    session_factory = build_session_factory(database_path)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+
+    class UnicodePlaylistDownloader:
+        def resolve_playlist(self, source_url: str) -> ResolvedSource:
+            return ResolvedSource(
+                source_kind="youtube_playlist",
+                external_id="PLUNICODE",
+                source_url=source_url,
+                display_name="中文播放列表",
+                cover_url=None,
+            )
+
+        def resolve_channel(self, source_input: str) -> ResolvedSource:
+            raise AssertionError("resolve_channel should not be called for playlist URLs")
+
+    service = SyncService(
+        settings,
+        downloader=UnicodePlaylistDownloader(),
+        media_store=MediaStore(settings),
+        session_factory=session_factory,
+    )
+
+    channel = service.register_channel("https://www.youtube.com/playlist?list=PLUNICODE")
+
+    with session_factory() as session:
+        stored = session.get(Channel, channel.id)
+        assert stored is not None
+        assert stored.slug == "中文播放列表"
+
+
+def test_register_playlist_uses_external_id_when_name_has_no_slug_chars(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    session_factory = build_session_factory(database_path)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+
+    class SymbolOnlyPlaylistDownloader:
+        def resolve_playlist(self, source_url: str) -> ResolvedSource:
+            return ResolvedSource(
+                source_kind="youtube_playlist",
+                external_id="PLFALLBACK123",
+                source_url=source_url,
+                display_name="!!!",
+                cover_url=None,
+            )
+
+        def resolve_channel(self, source_input: str) -> ResolvedSource:
+            raise AssertionError("resolve_channel should not be called for playlist URLs")
+
+    service = SyncService(
+        settings,
+        downloader=SymbolOnlyPlaylistDownloader(),
+        media_store=MediaStore(settings),
+        session_factory=session_factory,
+    )
+
+    channel = service.register_channel("https://www.youtube.com/playlist?list=PLFALLBACK123")
+
+    with session_factory() as session:
+        stored = session.get(Channel, channel.id)
+        assert stored is not None
+        assert stored.slug == "plfallback123"
 
 
 def test_register_rejects_non_standard_playlist_url(tmp_path: Path) -> None:

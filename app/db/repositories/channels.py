@@ -38,9 +38,9 @@ def get_channel_by_external_id(session: Session, external_channel_id: str) -> Ch
     return session.scalar(stmt)
 
 
-def allocate_slug(session: Session, display_name: str) -> str:
+def allocate_slug(session: Session, display_name: str, *, fallback: str) -> str:
     existing = set(session.scalars(select(Channel.slug)))
-    return unique_slug(slugify(display_name), existing)
+    return unique_slug(slugify(display_name, fallback=fallback), existing)
 
 
 def create_channel(

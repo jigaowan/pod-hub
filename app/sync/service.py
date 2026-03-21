@@ -51,7 +51,11 @@ class SyncService:
             if existing is not None:
                 raise ValidationError("This source is already registered")
 
-            slug = channel_repo.allocate_slug(session, resolved.display_name)
+            slug = channel_repo.allocate_slug(
+                session,
+                resolved.display_name,
+                fallback=resolved.external_id,
+            )
             channel = channel_repo.create_channel(
                 session,
                 source_kind=resolved.source_kind,

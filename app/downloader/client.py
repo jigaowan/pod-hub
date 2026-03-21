@@ -37,11 +37,11 @@ class YtDlpClient:
         if not external_channel_id:
             raise SourceResolutionError("Unable to resolve a stable YouTube channel id")
 
-        display_name = (
-            payload.get("channel")
-            or payload.get("uploader")
-            or payload.get("title")
-            or external_channel_id
+        display_name = self._first_non_url_string(
+            payload.get("channel"),
+            payload.get("uploader"),
+            payload.get("title"),
+            external_channel_id,
         )
         source_url = payload.get("channel_url") or normalized
         cover_url = self._select_cover_url(payload)
@@ -62,7 +62,11 @@ class YtDlpClient:
         if not playlist_id:
             raise SourceResolutionError("Unable to resolve a stable YouTube playlist id")
 
-        display_name = payload.get("title") or f"Playlist {playlist_id}"
+        display_name = self._first_non_url_string(
+            payload.get("playlist_title"),
+            payload.get("title"),
+            f"Playlist {playlist_id}",
+        )
         resolved_url = payload.get("webpage_url") or source_url
         cover_url = self._select_cover_url(payload)
         return ResolvedSource(
@@ -320,6 +324,25 @@ class YtDlpClient:
             "handshake operation timed out",
         )
         return any(pattern in lowered for pattern in patterns)
+
+    def _first_non_url_string(self, *values: object) -> str:
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            cleaned = value.strip()
+            if not cleaned or self._looks_like_url(cleaned):
+                continue
+            return cleaned
+
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        raise SourceResolutionError("Unable to resolve a display name for the source")
+
+    def _looks_like_url(self, value: str) -> bool:
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
     def _select_cover_url(self, payload: dict) -> str | None:
         thumbnails = payload.get("thumbnails") or []
