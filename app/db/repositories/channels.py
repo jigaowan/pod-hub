@@ -71,6 +71,11 @@ def create_channel(
     return channel
 
 
+def delete_channel(session: Session, channel: Channel) -> None:
+    session.delete(channel)
+    session.flush()
+
+
 def mark_sync_started(channel: Channel) -> None:
     channel.status = "syncing"
     channel.updated_at = utc_now()

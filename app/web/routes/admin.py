@@ -106,3 +106,12 @@ def show_channel(request: Request, channel_slug: str) -> HTMLResponse:
         )
     finally:
         session.close()
+
+
+@router.post("/admin/channels/{channel_slug}/delete")
+def delete_channel(request: Request, channel_slug: str) -> HTMLResponse:
+    deleted = request.app.state.sync_service.delete_channel(channel_slug)
+    if not deleted:
+        return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    return RedirectResponse(url="/admin/channels", status_code=status.HTTP_303_SEE_OTHER)

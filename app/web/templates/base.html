@@ -85,13 +85,23 @@
         border-radius: 999px;
         background: var(--accent);
         color: white;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font: inherit;
       }
       .button.secondary {
         background: transparent;
         color: var(--accent);
         border: 1px solid var(--accent);
       }
+      .button.danger {
+        background: var(--error);
+      }
       form { display: grid; gap: 12px; }
+      form.inline-form {
+        display: inline-block;
+        margin: 0;
+      }
       input[type="text"] {
         width: 100%;
         padding: 12px 14px;

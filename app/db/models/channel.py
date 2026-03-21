@@ -32,6 +32,5 @@ class Channel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    episodes: Mapped[list["Episode"]] = relationship(back_populates="channel")
-    sync_runs: Mapped[list["SyncRun"]] = relationship(back_populates="channel")
-
+    episodes: Mapped[list["Episode"]] = relationship(back_populates="channel", cascade="all, delete-orphan")
+    sync_runs: Mapped[list["SyncRun"]] = relationship(back_populates="channel", cascade="all, delete-orphan")

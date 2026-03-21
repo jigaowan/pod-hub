@@ -16,6 +16,9 @@
     </div>
     <div class="actions">
       <a class="button secondary" href="/admin/channels">返回列表</a>
+      <form class="inline-form" method="post" action="/admin/channels/{{ channel.slug }}/delete" onsubmit="return confirm('删除后只会移除项目中的来源记录，已抓取文件会保留。确定继续吗？');">
+        <button class="button danger" type="submit">删除来源</button>
+      </form>
     </div>
   </section>
 
@@ -41,6 +44,7 @@
         {% endif %}
       </div>
       <div class="muted">最近错误：{{ channel.last_error or "-" }}</div>
+      <div class="muted">删除来源只会移除项目中的记录，已抓取文件不会从媒体目录删除。</div>
     </article>
 
     <article class="panel stack">

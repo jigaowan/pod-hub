@@ -29,6 +29,7 @@
           <th>状态</th>
           <th>最近同步</th>
           <th>最近错误</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -52,10 +53,15 @@
               {% endif %}
             </td>
             <td class="muted">{{ channel.last_error or "-" }}</td>
+            <td>
+              <form class="inline-form" method="post" action="/admin/channels/{{ channel.slug }}/delete" onsubmit="return confirm('删除后只会移除项目中的来源记录，已抓取文件会保留。确定继续吗？');">
+                <button class="button danger" type="submit">删除来源</button>
+              </form>
+            </td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="6" class="muted">当前还没有来源，先新增一个 YouTube 频道或播放列表。</td>
+            <td colspan="7" class="muted">当前还没有来源，先新增一个 YouTube 频道或播放列表。</td>
           </tr>
         {% endfor %}
       </tbody>

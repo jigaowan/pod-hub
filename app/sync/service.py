@@ -82,6 +82,22 @@ class SyncService:
         finally:
             session.close()
 
+    def delete_channel(self, channel_slug: str) -> bool:
+        session = self.session_factory()
+        try:
+            channel = channel_repo.get_channel_by_slug(session, channel_slug)
+            if channel is None:
+                return False
+
+            channel_repo.delete_channel(session, channel)
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def sync_all_channels(self) -> None:
         session = self.session_factory()
         try:
