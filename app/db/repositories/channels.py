@@ -52,6 +52,7 @@ def create_channel(
     source_url: str,
     display_name: str,
     slug: str,
+    cookie_text: str | None = None,
     status: str = "pending_initial_sync",
 ) -> Channel:
     now = utc_now()
@@ -62,6 +63,7 @@ def create_channel(
         source_url=source_url,
         display_name=display_name,
         slug=slug,
+        cookie_text=cookie_text,
         status=status,
         created_at=now,
         updated_at=now,
@@ -69,6 +71,11 @@ def create_channel(
     session.add(channel)
     session.flush()
     return channel
+
+
+def update_cookie_text(channel: Channel, cookie_text: str | None) -> None:
+    channel.cookie_text = cookie_text
+    channel.updated_at = utc_now()
 
 
 def delete_channel(session: Session, channel: Channel) -> None:

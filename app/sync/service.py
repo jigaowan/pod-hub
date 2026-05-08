@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.common.cookies import normalize_cookie_text
 from app.common.errors import ValidationError
 from app.common.time import utc_now
 from app.config import Settings
@@ -38,12 +39,13 @@ class SyncService:
         self.session_factory = session_factory or get_session_factory(settings)
         self.logger = logging.getLogger("podhub.sync")
 
-    def register_channel(self, source_input: str):
+    def register_channel(self, source_input: str, cookie_text: str | None = None):
         cleaned = source_input.strip()
         if not cleaned:
             raise ValidationError("source_input is required")
+        normalized_cookie_text = normalize_cookie_text(cookie_text)
 
-        resolved = self._resolve_source(cleaned)
+        resolved = self._resolve_source(cleaned, normalized_cookie_text)
 
         session = self.session_factory()
         try:
@@ -64,6 +66,7 @@ class SyncService:
                 source_url=resolved.source_url,
                 display_name=resolved.display_name,
                 slug=slug,
+                cookie_text=normalized_cookie_text,
             )
             session.commit()
             if resolved.cover_url:
@@ -81,6 +84,27 @@ class SyncService:
             raise
         finally:
             session.close()
+
+    def update_channel_cookie(self, channel_slug: str, cookie_text: str | None) -> bool:
+        normalized_cookie_text = normalize_cookie_text(cookie_text)
+
+        session = self.session_factory()
+        try:
+            channel = channel_repo.get_channel_by_slug(session, channel_slug)
+            if channel is None:
+                return False
+
+            channel_repo.update_cookie_text(channel, normalized_cookie_text)
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def delete_channel_cookie(self, channel_slug: str) -> bool:
+        return self.update_channel_cookie(channel_slug, None)
 
     def delete_channel(self, channel_slug: str) -> bool:
         session = self.session_factory()
@@ -139,7 +163,12 @@ class SyncService:
             sync_run = sync_run_repo.create_sync_run(session, channel.id)
             session.commit()
 
-            discovered_entries = self._list_source_episodes(channel.source_kind, channel.source_url)
+            cookie_text = channel.cookie_text
+            discovered_entries = self._list_source_episodes(
+                channel.source_kind,
+                channel.source_url,
+                cookie_text,
+            )
             new_episode_ids = episode_repo.upsert_discovered_episodes(
                 session,
                 channel_id=channel.id,
@@ -186,7 +215,12 @@ class SyncService:
                     episode_repo.set_episode_status(episode, "fetching")
                     session.commit()
 
-                    fetched_audio = self.downloader.fetch_episode_audio(episode.webpage_url, episode.id, temp_dir)
+                    fetched_audio = self.downloader.fetch_episode_audio(
+                        episode.webpage_url,
+                        episode.id,
+                        temp_dir,
+                        cookie_text=cookie_text,
+                    )
                     published_path = self.media_store.publish_audio(
                         fetched_audio.temp_file_path,
                         channel.slug,
@@ -240,20 +274,20 @@ class SyncService:
         finally:
             session.close()
 
-    def _resolve_source(self, source_input: str):
+    def _resolve_source(self, source_input: str, cookie_text: str | None = None):
         if self._is_standard_playlist_url(source_input):
-            return self.downloader.resolve_playlist(source_input)
+            return self.downloader.resolve_playlist(source_input, cookie_text=cookie_text)
         if self._has_playlist_param(source_input):
             raise ValidationError(
                 "Detected a playlist parameter. Please use a standard playlist URL like "
                 "https://www.youtube.com/playlist?list=PL..."
             )
-        return self.downloader.resolve_channel(source_input)
+        return self.downloader.resolve_channel(source_input, cookie_text=cookie_text)
 
-    def _list_source_episodes(self, source_kind: str, source_url: str):
+    def _list_source_episodes(self, source_kind: str, source_url: str, cookie_text: str | None = None):
         if source_kind == "youtube_playlist":
-            return self.downloader.list_playlist_episodes(source_url)
-        return self.downloader.list_channel_episodes(source_url)
+            return self.downloader.list_playlist_episodes(source_url, cookie_text=cookie_text)
+        return self.downloader.list_channel_episodes(source_url, cookie_text=cookie_text)
 
     def _is_standard_playlist_url(self, source_input: str) -> bool:
         parsed = urlparse(source_input)

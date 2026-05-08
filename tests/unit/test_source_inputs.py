@@ -16,9 +16,11 @@ from app.sync.service import SyncService
 class PlaylistOnlyDownloader:
     def __init__(self) -> None:
         self.called = False
+        self.cookie_text = None
 
-    def resolve_playlist(self, source_url: str) -> ResolvedSource:
+    def resolve_playlist(self, source_url: str, cookie_text: str | None = None) -> ResolvedSource:
         self.called = True
+        self.cookie_text = cookie_text
         return ResolvedSource(
             source_kind="youtube_playlist",
             external_id="PL123",
@@ -27,15 +29,15 @@ class PlaylistOnlyDownloader:
             cover_url=None,
         )
 
-    def resolve_channel(self, source_input: str) -> ResolvedSource:
+    def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
         raise AssertionError("resolve_channel should not be called for playlist URLs")
 
 
 class RejectingDownloader:
-    def resolve_playlist(self, source_url: str) -> ResolvedSource:
+    def resolve_playlist(self, source_url: str, cookie_text: str | None = None) -> ResolvedSource:
         raise AssertionError("resolve_playlist should not be called for non-standard playlist URLs")
 
-    def resolve_channel(self, source_input: str) -> ResolvedSource:
+    def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
         raise AssertionError("resolve_channel should not be called for non-standard playlist URLs")
 
 
@@ -70,6 +72,52 @@ def test_register_playlist_source_kind(tmp_path: Path) -> None:
         assert stored.source_kind == "youtube_playlist"
         assert stored.external_channel_id == "PL123"
         assert stored.slug == "demo-playlist"
+        assert stored.cookie_text is None
+
+
+def test_register_channel_saves_cookie_text_and_uses_it_for_resolution(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    session_factory = build_session_factory(database_path)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+    downloader = PlaylistOnlyDownloader()
+    service = SyncService(
+        settings,
+        downloader=downloader,
+        media_store=MediaStore(settings),
+        session_factory=session_factory,
+    )
+    cookie_text = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsecret\n"
+
+    channel = service.register_channel("https://www.youtube.com/playlist?list=PL123", cookie_text=cookie_text)
+
+    assert downloader.cookie_text == cookie_text
+    with session_factory() as session:
+        stored = session.get(Channel, channel.id)
+        assert stored is not None
+        assert stored.cookie_text == cookie_text
+
+
+def test_register_channel_rejects_invalid_cookie_text(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    session_factory = build_session_factory(database_path)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+    service = SyncService(
+        settings,
+        downloader=PlaylistOnlyDownloader(),
+        media_store=MediaStore(settings),
+        session_factory=session_factory,
+    )
+
+    with pytest.raises(ValidationError, match="cookies.txt"):
+        service.register_channel("https://www.youtube.com/playlist?list=PL123", cookie_text="SID=secret")
 
 
 def test_register_playlist_uses_unicode_slug(tmp_path: Path) -> None:
@@ -82,7 +130,7 @@ def test_register_playlist_uses_unicode_slug(tmp_path: Path) -> None:
     )
 
     class UnicodePlaylistDownloader:
-        def resolve_playlist(self, source_url: str) -> ResolvedSource:
+        def resolve_playlist(self, source_url: str, cookie_text: str | None = None) -> ResolvedSource:
             return ResolvedSource(
                 source_kind="youtube_playlist",
                 external_id="PLUNICODE",
@@ -91,7 +139,7 @@ def test_register_playlist_uses_unicode_slug(tmp_path: Path) -> None:
                 cover_url=None,
             )
 
-        def resolve_channel(self, source_input: str) -> ResolvedSource:
+        def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
             raise AssertionError("resolve_channel should not be called for playlist URLs")
 
     service = SyncService(
@@ -119,7 +167,7 @@ def test_register_playlist_uses_external_id_when_name_has_no_slug_chars(tmp_path
     )
 
     class SymbolOnlyPlaylistDownloader:
-        def resolve_playlist(self, source_url: str) -> ResolvedSource:
+        def resolve_playlist(self, source_url: str, cookie_text: str | None = None) -> ResolvedSource:
             return ResolvedSource(
                 source_kind="youtube_playlist",
                 external_id="PLFALLBACK123",
@@ -128,7 +176,7 @@ def test_register_playlist_uses_external_id_when_name_has_no_slug_chars(tmp_path
                 cover_url=None,
             )
 
-        def resolve_channel(self, source_input: str) -> ResolvedSource:
+        def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
             raise AssertionError("resolve_channel should not be called for playlist URLs")
 
     service = SyncService(

@@ -31,6 +31,7 @@
 | `source_url` | TEXT | NOT NULL | 归一化后的频道或播放列表 URL |
 | `display_name` | TEXT | NOT NULL | 展示名称 |
 | `slug` | TEXT | NOT NULL, UNIQUE | feed 路径标识；创建后不自动变更 |
+| `cookie_text` | TEXT | NULL | 可选 cookies.txt 内容，仅用于该来源的 `yt-dlp --cookies` 调用 |
 | `status` | TEXT | NOT NULL | 见下方枚举 |
 | `last_synced_at` | DATETIME | NULL | 最近一次成功完成同步的时间 |
 | `last_error` | TEXT | NULL | 最近一次同步错误摘要 |

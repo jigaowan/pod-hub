@@ -102,12 +102,19 @@
         display: inline-block;
         margin: 0;
       }
-      input[type="text"] {
+      input[type="text"],
+      textarea {
         width: 100%;
         padding: 12px 14px;
         border-radius: 12px;
         border: 1px solid var(--border);
         font: inherit;
+      }
+      textarea {
+        min-height: 180px;
+        resize: vertical;
+        font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+        font-size: 0.9rem;
       }
       .error-box {
         border: 1px solid rgba(156, 47, 47, 0.25);

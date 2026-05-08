@@ -26,6 +26,7 @@ class Channel(Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    cookie_text: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)

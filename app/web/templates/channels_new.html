@@ -18,6 +18,16 @@
     <form method="post" action="/admin/channels">
       <label for="source_input">来源标识</label>
       <input id="source_input" name="source_input" type="text" value="{{ source_input }}" placeholder="https://www.youtube.com/playlist?list=PL...">
+      <label for="cookie_text">cookies.txt（可选）</label>
+      <textarea id="cookie_text" name="cookie_text" placeholder="# Netscape HTTP Cookie File"></textarea>
+      <p class="muted">
+        会员视频、私有播放列表或年龄限制内容通常需要 YouTube 账号 cookie。按 yt-dlp 官方说明，建议使用隐身窗口登录 YouTube，在同一标签页打开
+        <code>https://www.youtube.com/robots.txt</code> 后导出 <code>youtube.com</code> cookies；文件第一行应为
+        <code># HTTP Cookie File</code> 或 <code># Netscape HTTP Cookie File</code>，Unix/macOS 使用 LF 换行。使用账号 cookie 可能带来账号风控风险。
+        参考：
+        <a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" target="_blank" rel="noreferrer">yt-dlp FAQ</a>，
+        <a href="https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies" target="_blank" rel="noreferrer">YouTube cookie 导出说明</a>。
+      </p>
       <button class="button" type="submit">保存来源</button>
     </form>
     <p class="muted">

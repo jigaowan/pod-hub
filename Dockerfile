@@ -23,7 +23,7 @@ COPY docs /app/docs
 
 RUN pip install --upgrade pip \
     && pip install . \
-    && pip install yt-dlp==2026.2.4
+    && pip install "yt-dlp[default]==2026.3.17"
 
 EXPOSE 8000
 

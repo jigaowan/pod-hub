@@ -61,10 +61,14 @@ def new_channel_form(request: Request) -> HTMLResponse:
 
 
 @router.post("/admin/channels", response_class=HTMLResponse)
-def create_channel(request: Request, source_input: str = Form(...)) -> HTMLResponse:
+def create_channel(
+    request: Request,
+    source_input: str = Form(...),
+    cookie_text: str | None = Form(default=None),
+) -> HTMLResponse:
     sync_service = request.app.state.sync_service
     try:
-        channel = sync_service.register_channel(source_input)
+        channel = sync_service.register_channel(source_input, cookie_text=cookie_text)
         return RedirectResponse(
             url=f"/admin/channels/{channel.slug}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -82,8 +86,13 @@ def create_channel(request: Request, source_input: str = Form(...)) -> HTMLRespo
         )
 
 
-@router.get("/admin/channels/{channel_slug}", response_class=HTMLResponse)
-def show_channel(request: Request, channel_slug: str) -> HTMLResponse:
+def render_channel_detail(
+    request: Request,
+    channel_slug: str,
+    *,
+    status_code: int = status.HTTP_200_OK,
+    cookie_error: str | None = None,
+) -> HTMLResponse:
     session_factory = get_session_factory(request.app.state.settings)
     session = session_factory()
     try:
@@ -102,10 +111,48 @@ def show_channel(request: Request, channel_slug: str) -> HTMLResponse:
                 "sync_run": to_sync_run_summary(latest_sync_run),
                 "base_url": request.app.state.settings.base_url,
                 "next_sync_at": get_next_sync_at(request),
+                "cookie_error": cookie_error,
             },
+            status_code=status_code,
         )
     finally:
         session.close()
+
+
+@router.get("/admin/channels/{channel_slug}", response_class=HTMLResponse)
+def show_channel(request: Request, channel_slug: str) -> HTMLResponse:
+    return render_channel_detail(request, channel_slug)
+
+
+@router.post("/admin/channels/{channel_slug}/cookie", response_class=HTMLResponse)
+def update_channel_cookie(
+    request: Request,
+    channel_slug: str,
+    cookie_text: str | None = Form(default=None),
+) -> HTMLResponse:
+    try:
+        updated = request.app.state.sync_service.update_channel_cookie(channel_slug, cookie_text)
+    except PodHubError as exc:
+        return render_channel_detail(
+            request,
+            channel_slug,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            cookie_error=str(exc),
+        )
+
+    if not updated:
+        return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    return RedirectResponse(url=f"/admin/channels/{channel_slug}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/channels/{channel_slug}/cookie/delete")
+def delete_channel_cookie(request: Request, channel_slug: str) -> HTMLResponse:
+    deleted = request.app.state.sync_service.delete_channel_cookie(channel_slug)
+    if not deleted:
+        return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    return RedirectResponse(url=f"/admin/channels/{channel_slug}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/admin/channels/{channel_slug}/delete")

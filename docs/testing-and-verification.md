@@ -118,7 +118,7 @@ docker compose up --build
 Notes:
 
 - The first image build is slow because the image installs `ffmpeg` from Debian packages.
-- Set `YTDLP_JS_RUNTIMES` in the shell before `docker compose up` only when the pinned `yt-dlp` version supports `--js-runtimes` and a matching runtime is available in the image, for example `YTDLP_JS_RUNTIMES=node`.
+- The Docker image installs Node and `yt-dlp[default]` so YouTube EJS challenge solving has both a JavaScript runtime and the `yt-dlp-ejs` scripts available. Compose defaults `YTDLP_JS_RUNTIMES` to `node`; override it only when testing another supported runtime.
 - Use a mounted throwaway `./data` directory or temporary volume for smoke tests.
 - Container verification should include at least one HTTP request to `/admin/channels` after startup.
 

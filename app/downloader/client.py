@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import logging
+import os
 import subprocess
+import tempfile
 import time
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
@@ -21,11 +25,12 @@ class YtDlpClient:
         self.settings = settings
         self.logger = logging.getLogger("podhub.downloader")
 
-    def resolve_channel(self, source_input: str) -> ResolvedSource:
+    def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
         normalized = self._normalize_source_input(source_input)
         payload = self._run_json(
             "resolve_channel",
             ["--flat-playlist", "--playlist-end", "1", "--dump-single-json", normalized],
+            cookie_text=cookie_text,
         )
 
         external_channel_id = (
@@ -52,10 +57,11 @@ class YtDlpClient:
             cover_url=cover_url,
         )
 
-    def resolve_playlist(self, source_url: str) -> ResolvedSource:
+    def resolve_playlist(self, source_url: str, cookie_text: str | None = None) -> ResolvedSource:
         payload = self._run_json(
             "resolve_playlist",
             ["--flat-playlist", "--playlist-end", "1", "--dump-single-json", source_url],
+            cookie_text=cookie_text,
         )
         playlist_id = payload.get("id") or self._extract_playlist_id_from_input(source_url)
         if not playlist_id:
@@ -76,10 +82,11 @@ class YtDlpClient:
             cover_url=cover_url,
         )
 
-    def list_channel_episodes(self, source_url: str) -> list[DiscoveredEpisode]:
+    def list_channel_episodes(self, source_url: str, cookie_text: str | None = None) -> list[DiscoveredEpisode]:
         payload = self._run_json(
             "list_channel",
             ["--flat-playlist", "--dump-single-json", source_url],
+            cookie_text=cookie_text,
         )
         entries = payload.get("entries") or []
 
@@ -110,10 +117,11 @@ class YtDlpClient:
             )
         return episodes
 
-    def list_playlist_episodes(self, source_url: str) -> list[DiscoveredEpisode]:
+    def list_playlist_episodes(self, source_url: str, cookie_text: str | None = None) -> list[DiscoveredEpisode]:
         payload = self._run_json(
             "list_playlist",
             ["--flat-playlist", "--dump-single-json", source_url],
+            cookie_text=cookie_text,
         )
         entries = payload.get("entries") or []
 
@@ -144,10 +152,17 @@ class YtDlpClient:
             )
         return episodes
 
-    def fetch_episode_audio(self, webpage_url: str, episode_id: int, temp_dir: Path) -> FetchedAudio:
+    def fetch_episode_audio(
+        self,
+        webpage_url: str,
+        episode_id: int,
+        temp_dir: Path,
+        cookie_text: str | None = None,
+    ) -> FetchedAudio:
         metadata = self._run_json(
             "fetch_metadata",
             ["--no-playlist", "--dump-single-json", webpage_url],
+            cookie_text=cookie_text,
         )
 
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -174,7 +189,7 @@ class YtDlpClient:
             webpage_url,
         ]
         try:
-            self._run_command("download_audio", download_args, timeout=3600)
+            self._run_command("download_audio", download_args, timeout=3600, cookie_text=cookie_text)
         except DownloaderError as exc:
             if temp_file_path.exists() and temp_file_path.stat().st_size >= 16 * 1024:
                 self.logger.warning(
@@ -206,7 +221,12 @@ class YtDlpClient:
                         output_template,
                         webpage_url,
                     ]
-                    self._run_command("download_audio_no_thumbnail", retry_args, timeout=3600)
+                    self._run_command(
+                        "download_audio_no_thumbnail",
+                        retry_args,
+                        timeout=3600,
+                        cookie_text=cookie_text,
+                    )
                 else:
                     raise
 
@@ -227,14 +247,21 @@ class YtDlpClient:
             temp_file_path=temp_file_path,
         )
 
-    def _run_json(self, command_type: str, extra_args: list[str]) -> dict:
-        completed = self._run_command(command_type, [*extra_args], timeout=1800)
+    def _run_json(self, command_type: str, extra_args: list[str], cookie_text: str | None = None) -> dict:
+        completed = self._run_command(command_type, [*extra_args], timeout=1800, cookie_text=cookie_text)
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             raise DownloaderError(f"yt-dlp returned invalid JSON for {command_type}") from exc
 
-    def _run_command(self, command_type: str, extra_args: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    def _run_command(
+        self,
+        command_type: str,
+        extra_args: list[str],
+        *,
+        timeout: int,
+        cookie_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         command = [self.settings.ytdlp_bin]
         if self.settings.ytdlp_proxy:
             command.extend(["--proxy", self.settings.ytdlp_proxy])
@@ -247,15 +274,18 @@ class YtDlpClient:
             command.extend(["--retries", str(self.settings.ytdlp_retries)])
         if self.settings.ytdlp_fragment_retries:
             command.extend(["--fragment-retries", str(self.settings.ytdlp_fragment_retries)])
-        command.extend(extra_args)
-        started = time.monotonic()
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        with self._temporary_cookie_file(cookie_text) as cookie_path:
+            if cookie_path is not None:
+                command.extend(["--cookies", str(cookie_path)])
+            command.extend(extra_args)
+            started = time.monotonic()
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         duration = time.monotonic() - started
         self.logger.info("yt-dlp command=%s duration=%.3fs returncode=%s", command_type, duration, completed.returncode)
 
@@ -268,6 +298,34 @@ class YtDlpClient:
             raise error
 
         return completed
+
+    @contextmanager
+    def _temporary_cookie_file(self, cookie_text: str | None) -> Iterator[Path | None]:
+        if cookie_text is None:
+            yield None
+            return
+
+        self.settings.tmp_media_dir.mkdir(parents=True, exist_ok=True)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.settings.tmp_media_dir,
+                prefix="yt-dlp-cookies-",
+                suffix=".txt",
+                delete=False,
+            ) as temp_file:
+                temp_file.write(cookie_text)
+                temp_path = Path(temp_file.name)
+            os.chmod(temp_path, 0o600)
+            yield temp_path
+        finally:
+            if temp_path is not None and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
 
     def _normalize_source_input(self, source_input: str) -> str:
         value = source_input.strip()

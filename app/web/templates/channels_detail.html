@@ -72,6 +72,41 @@
         <div class="muted">还没有同步记录。</div>
       {% endif %}
     </article>
+
+    <article class="panel stack">
+      <strong>Cookie 配置</strong>
+      <div class="muted">
+        当前状态：
+        {% if channel.cookie_text %}
+          已配置
+        {% else %}
+          未配置
+        {% endif %}
+      </div>
+      {% if cookie_error %}
+        <div class="error-box">{{ cookie_error }}</div>
+      {% endif %}
+      <form method="post" action="/admin/channels/{{ channel.slug }}/cookie">
+        <label for="cookie_text">替换 cookies.txt</label>
+        <textarea id="cookie_text" name="cookie_text" placeholder="# Netscape HTTP Cookie File"></textarea>
+        <p class="muted">
+          已保存的 cookie 不会在页面回显。会员视频通常需要 YouTube 账号 cookie；yt-dlp 建议用隐身窗口登录后打开
+          <code>https://www.youtube.com/robots.txt</code>，再导出 <code>youtube.com</code> cookies。文件第一行应为
+          <code># HTTP Cookie File</code> 或 <code># Netscape HTTP Cookie File</code>，Unix/macOS 使用 LF 换行。使用账号 cookie 可能带来账号风控风险。
+          参考：
+          <a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" target="_blank" rel="noreferrer">yt-dlp FAQ</a>，
+          <a href="https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies" target="_blank" rel="noreferrer">YouTube cookie 导出说明</a>。
+        </p>
+        <div class="actions">
+          <button class="button" type="submit">保存 Cookie</button>
+        </div>
+      </form>
+      {% if channel.cookie_text %}
+        <form class="inline-form" method="post" action="/admin/channels/{{ channel.slug }}/cookie/delete" onsubmit="return confirm('确定删除该来源保存的 cookie 吗？');">
+          <button class="button secondary" type="submit">删除 Cookie</button>
+        </form>
+      {% endif %}
+    </article>
   </section>
 
   <section class="panel" style="margin-top: 16px;">
