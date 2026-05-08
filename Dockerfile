@@ -8,7 +8,8 @@ ENV PYTHONUNBUFFERED=1 \
     MEDIA_DIR=/data/media \
     DATABASE_PATH=/data/db/podhub.db \
     LOG_LEVEL=INFO \
-    YTDLP_BIN=yt-dlp
+    YTDLP_BIN=yt-dlp \
+    YTDLP_JS_RUNTIMES=node
 
 WORKDIR /app
 

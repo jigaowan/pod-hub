@@ -118,6 +118,7 @@ docker compose up --build
 Notes:
 
 - The first image build is slow because the image installs `ffmpeg` from Debian packages.
+- Set `YTDLP_JS_RUNTIMES` in the shell before `docker compose up` only when the pinned `yt-dlp` version supports `--js-runtimes` and a matching runtime is available in the image, for example `YTDLP_JS_RUNTIMES=node`.
 - Use a mounted throwaway `./data` directory or temporary volume for smoke tests.
 - Container verification should include at least one HTTP request to `/admin/channels` after startup.
 
