@@ -17,6 +17,7 @@ class Episode(Base):
     __table_args__ = (
         UniqueConstraint("channel_id", "source_video_id", name="uq_episodes_channel_video"),
         Index("ix_episodes_channel_published_at", "channel_id", "published_at"),
+        Index("ix_episodes_channel_source_position", "channel_id", "source_position"),
         Index("ix_episodes_channel_status_listed_at", "channel_id", "status", "listed_at"),
         Index("ix_episodes_status_audio_fetched_at", "status", "audio_fetched_at"),
     )
@@ -24,6 +25,7 @@ class Episode(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), nullable=False)
     source_video_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_position: Mapped[int | None] = mapped_column(Integer)
     webpage_url: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
@@ -42,4 +44,3 @@ class Episode(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     channel: Mapped["Channel"] = relationship(back_populates="episodes")
-

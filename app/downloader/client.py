@@ -4,7 +4,6 @@ import json
 import logging
 import subprocess
 import time
-import shutil
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
@@ -85,7 +84,7 @@ class YtDlpClient:
         entries = payload.get("entries") or []
 
         episodes: list[DiscoveredEpisode] = []
-        for entry in entries:
+        for source_position, entry in enumerate(entries, start=1):
             source_video_id = entry.get("id")
             if not source_video_id:
                 continue
@@ -99,6 +98,7 @@ class YtDlpClient:
             episodes.append(
                 DiscoveredEpisode(
                     source_video_id=source_video_id,
+                    source_position=source_position,
                     webpage_url=webpage_url,
                     title=entry.get("title") or source_video_id,
                     description=entry.get("description"),
@@ -118,7 +118,7 @@ class YtDlpClient:
         entries = payload.get("entries") or []
 
         episodes: list[DiscoveredEpisode] = []
-        for entry in entries:
+        for source_position, entry in enumerate(entries, start=1):
             source_video_id = entry.get("id")
             if not source_video_id:
                 continue
@@ -132,6 +132,7 @@ class YtDlpClient:
             episodes.append(
                 DiscoveredEpisode(
                     source_video_id=source_video_id,
+                    source_position=source_position,
                     webpage_url=webpage_url,
                     title=entry.get("title") or source_video_id,
                     description=entry.get("description"),
@@ -301,15 +302,7 @@ class YtDlpClient:
         return cleaned[:MAX_ERROR_LENGTH]
 
     def _select_js_runtimes(self) -> str | None:
-        override = self.settings.ytdlp_js_runtimes
-        if override:
-            return override
-
-        # yt-dlp defaults to enabling only deno, but node is often available in our runtime images.
-        for runtime in ("node", "deno", "bun"):
-            if shutil.which(runtime):
-                return runtime
-        return None
+        return self.settings.ytdlp_js_runtimes
 
     def _looks_like_thumbnail_or_embed_failure(self, stderr: str) -> bool:
         lowered = (stderr or "").lower()

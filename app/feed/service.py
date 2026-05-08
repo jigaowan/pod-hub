@@ -29,12 +29,23 @@ class FeedService:
             if channel is None:
                 return None
 
-            episodes = episode_repo.list_feed_ready_episodes(session, channel.id)
-            return self._build_xml(channel.display_name, channel.source_url, episodes)
+            episodes = episode_repo.list_feed_ready_episodes(session, channel.id, channel.source_kind)
+            return self._build_xml(
+                channel.display_name,
+                channel.source_url,
+                channel.external_channel_id,
+                episodes,
+            )
         finally:
             session.close()
 
-    def _build_xml(self, display_name: str, source_url: str, episodes: list) -> str:
+    def _build_xml(
+        self,
+        display_name: str,
+        source_url: str,
+        external_channel_id: str,
+        episodes: list,
+    ) -> str:
         rss = ET.Element("rss", version="2.0")
         channel_element = ET.SubElement(rss, "channel")
 
@@ -48,7 +59,9 @@ class FeedService:
             item = ET.SubElement(channel_element, "item")
             ET.SubElement(item, "title").text = episode.title
             ET.SubElement(item, "description").text = episode.description or ""
-            ET.SubElement(item, "guid").text = f"podhub:episode:{episode.id}"
+            ET.SubElement(item, "guid", {"isPermaLink": "false"}).text = (
+                f"podhub:youtube:{external_channel_id}:{episode.source_video_id}"
+            )
             ET.SubElement(item, "link").text = episode.webpage_url
             if episode.published_at is not None:
                 ET.SubElement(item, "pubDate").text = format_datetime(episode.published_at)

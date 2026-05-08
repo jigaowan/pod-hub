@@ -23,12 +23,19 @@ def get_episode(session: Session, episode_id: int) -> Episode | None:
     return session.get(Episode, episode_id)
 
 
-def list_feed_ready_episodes(session: Session, channel_id: int) -> list[Episode]:
+def list_feed_ready_episodes(session: Session, channel_id: int, source_kind: str) -> list[Episode]:
     stmt = (
         select(Episode)
         .where(Episode.channel_id == channel_id, Episode.status == "audio_ready")
-        .order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
     )
+    if source_kind == "youtube_playlist":
+        stmt = stmt.order_by(
+            Episode.source_position.asc().nullslast(),
+            Episode.published_at.desc().nullslast(),
+            Episode.id.desc(),
+        )
+    else:
+        stmt = stmt.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
     return list(session.scalars(stmt))
 
 
@@ -61,6 +68,7 @@ def upsert_discovered_episodes(
             episode = Episode(
                 channel_id=channel_id,
                 source_video_id=entry.source_video_id,
+                source_position=entry.source_position,
                 webpage_url=entry.webpage_url,
                 title=entry.title,
                 description=entry.description,
@@ -79,6 +87,7 @@ def upsert_discovered_episodes(
             continue
 
         episode.webpage_url = entry.webpage_url
+        episode.source_position = entry.source_position
         episode.title = entry.title
         episode.description = entry.description or episode.description
         episode.upload_date = entry.upload_date or episode.upload_date

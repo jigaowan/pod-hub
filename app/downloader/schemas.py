@@ -17,6 +17,7 @@ class ResolvedSource:
 @dataclass(slots=True)
 class DiscoveredEpisode:
     source_video_id: str
+    source_position: int
     webpage_url: str
     title: str
     description: str | None

@@ -61,6 +61,7 @@
 | `id` | INTEGER | PK | 内部主键，也是媒体公开 URL 标识 |
 | `channel_id` | INTEGER | NOT NULL, FK -> channels.id | 所属频道 |
 | `source_video_id` | TEXT | NOT NULL | YouTube 视频 ID |
+| `source_position` | INTEGER | NULL | YouTube 当前返回顺序，播放列表 feed 使用 |
 | `webpage_url` | TEXT | NOT NULL | 视频页面 URL |
 | `title` | TEXT | NOT NULL | 节目标题 |
 | `description` | TEXT | NULL | 节目描述 |
@@ -97,6 +98,7 @@
 ### 索引
 
 - `INDEX(channel_id, published_at DESC)`
+- `INDEX(channel_id, source_position)`
 - `INDEX(channel_id, status, listed_at DESC)`
 - `INDEX(status, audio_fetched_at)`
 
@@ -152,13 +154,14 @@
 
 - 频道列表页：按 `created_at DESC` 读取 `channels`。
 - 频道详情页：按 `published_at DESC, id DESC` 读取该频道节目。
-- RSS 生成：只查询 `status = 'audio_ready'` 的节目，并按 `published_at DESC, id DESC` 输出。
+- RSS 生成：只查询 `status = 'audio_ready'` 的节目。YouTube 频道按 `published_at DESC, id DESC` 输出；YouTube 播放列表按 `source_position ASC, published_at DESC, id DESC` 输出。
 - 轮询抓取：每个频道每轮最多处理 `FETCH_BATCH_SIZE` 条，优先新发现节目，若仍有余量再按最旧未完成顺序补抓历史节目。
 
 ## URL 稳定性规则
 
 - `channels.slug` 一旦写入并用于 feed 发布，不因频道名变化自动重算。
 - `episodes.id` 为媒体 URL 的唯一标识，媒体文件名应与该值绑定。
+- RSS item `guid` 使用 YouTube 来源稳定键，不随数据库 id、播放列表位置或标题变化。
 - 若频道新增时 slug 冲突，采用追加数字后缀的方式解决，如 `example`, `example-2`。
 
 ## 与未来扩展的兼容边界
