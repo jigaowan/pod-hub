@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block title %}New Source - Pod Hub{% endblock %}
 {% block content %}
-  <section class="header">
+  <section class="page-header">
     <div>
-      <h1>新增来源</h1>
-      <p class="muted">支持频道 URL、<code>@handle</code>、频道 ID，或标准播放列表 URL。</p>
+      <p class="page-kicker">Source</p>
+      <h1 class="page-title">新增来源</h1>
+      <div class="page-meta">
+        <p>支持频道 URL、<code>@handle</code>、频道 ID，或标准播放列表 URL。</p>
+      </div>
     </div>
     <div class="actions">
       <a class="button secondary" href="/admin/channels">返回列表</a>
     </div>
   </section>
 
-  <section class="panel stack">
+  <section class="surface section-body stack form-panel">
     {% if error %}
       <div class="error-box">{{ error }}</div>
     {% endif %}
@@ -28,7 +31,9 @@
         <a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" target="_blank" rel="noreferrer">yt-dlp FAQ</a>，
         <a href="https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies" target="_blank" rel="noreferrer">YouTube cookie 导出说明</a>。
       </p>
-      <button class="button" type="submit">保存来源</button>
+      <div class="actions form-actions">
+        <button class="button" type="submit">保存来源</button>
+      </div>
     </form>
     <p class="muted">
       下一次自动同步：
