@@ -146,6 +146,8 @@ running -> failed
 running -> skipped
 ```
 
+若频道列表成功但本轮入队节目存在抓取失败，本轮也必须结束为 `failed`，并通过 `failed_count` 和 `error_message` 展示具体节目失败情况。
+
 ## 页面与数据一致性要求
 
 - 后台列表页和详情页展示的状态，必须直接来源于数据库状态字段，而不是现场推导。

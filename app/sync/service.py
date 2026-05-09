@@ -249,19 +249,25 @@ class SyncService:
                     self.media_store.cleanup_temp_dir(episode.id)
 
             finished_at = utc_now()
-            channel_repo.mark_sync_succeeded(channel, finished_at)
+            unique_notification_errors = collect_unique_errors(notification_errors)
+            sync_error_message = self._build_sync_error_message(unique_notification_errors)
+            if failed_count:
+                channel_repo.mark_sync_failed(channel, sync_error_message)
+            else:
+                channel_repo.mark_sync_succeeded(channel, finished_at)
             if sync_run is not None:
                 sync_run_repo.finish_sync_run(
                     sync_run,
-                    status="succeeded",
+                    status="failed" if failed_count else "succeeded",
                     discovered_count=discovered_count,
                     queued_count=queued_count,
                     fetched_count=fetched_count,
                     failed_count=failed_count,
+                    error_message=sync_error_message if failed_count else None,
                 )
             session.commit()
             if notify:
-                self._notify_sync_errors(channel_name, notification_errors)
+                self._notify_sync_errors(channel_name, unique_notification_errors)
         except Exception as exc:
             session.rollback()
             notification_errors.append(extract_ytdlp_error_message(exc))
@@ -289,9 +295,13 @@ class SyncService:
             session.close()
 
     def _notify_sync_errors(self, channel_name: str, errors: list[str]) -> None:
-        unique_errors = collect_unique_errors(errors)
-        if unique_errors:
-            self.notifier.notify_sync_errors(channel_name=channel_name, errors=unique_errors)
+        if errors:
+            self.notifier.notify_sync_errors(channel_name=channel_name, errors=errors)
+
+    def _build_sync_error_message(self, errors: list[str]) -> str:
+        if not errors:
+            return ""
+        return summarize_error(Exception("; ".join(errors)))
 
     def _resolve_source(self, source_input: str, cookie_text: str | None = None):
         if self._is_standard_playlist_url(source_input):

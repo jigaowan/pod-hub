@@ -11,6 +11,7 @@ from app.common.errors import DownloaderError
 from app.common.time import utc_now
 from app.config import Settings
 from app.db.base import Base
+from app.db.models.channel import Channel
 from app.db.models.sync_run import SyncRun
 from app.db.repositories import channels as channel_repo
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio
@@ -165,8 +166,16 @@ def test_episode_failures_are_summarized_in_one_notification(tmp_path: Path) -> 
     with session_factory() as session:
         sync_run = session.scalar(select(SyncRun))
         assert sync_run is not None
-        assert sync_run.status == "succeeded"
+        assert sync_run.status == "failed"
         assert sync_run.failed_count == 2
+        assert sync_run.error_message == (
+            "Private video. Sign in if you have been granted access; "
+            "Sign in to confirm you are not a bot"
+        )
+        channel = session.scalar(select(Channel))
+        assert channel is not None
+        assert channel.status == "error"
+        assert channel.last_error == sync_run.error_message
 
 
 def test_register_channel_failure_does_not_notify(tmp_path: Path) -> None:
