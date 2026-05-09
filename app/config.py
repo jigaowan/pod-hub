@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     ytdlp_retries: int = Field(default=5, alias="YTDLP_RETRIES")
     ytdlp_fragment_retries: int = Field(default=5, alias="YTDLP_FRAGMENT_RETRIES")
     tmp_media_dir: Path = Field(default=Path("/tmp/pod-hub"), alias="TMP_MEDIA_DIR")
+    alarm_url: str | None = Field(default=None, alias="ALARM_URL")
+    alarm_custom_psk: str | None = Field(default=None, alias="ALARM_CUSTOM_PSK")
+    alarm_tg_user_id: str | None = Field(default=None, alias="ALARM_TG_USER_ID")
+    alarm_timeout_seconds: int = Field(default=10, alias="ALARM_TIMEOUT_SECONDS")
 
     @field_validator("base_url")
     @classmethod
@@ -68,6 +72,42 @@ class Settings(BaseSettings):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("alarm_url")
+    @classmethod
+    def normalize_alarm_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("ALARM_URL must include a valid scheme and host")
+        return normalized
+
+    @field_validator("alarm_custom_psk", "alarm_tg_user_id")
+    @classmethod
+    def normalize_optional_secret(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("alarm_timeout_seconds")
+    @classmethod
+    def validate_alarm_timeout_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("ALARM_TIMEOUT_SECONDS must be a positive integer")
+        return value
+
+    @model_validator(mode="after")
+    def validate_alarm_config(self) -> "Settings":
+        alarm_values = (self.alarm_url, self.alarm_custom_psk, self.alarm_tg_user_id)
+        configured = [value is not None for value in alarm_values]
+        if any(configured) and not all(configured):
+            raise ValueError("ALARM_URL, ALARM_CUSTOM_PSK, and ALARM_TG_USER_ID must be set together")
+        return self
 
     def ensure_runtime_dirs(self) -> None:
         self.media_dir.mkdir(parents=True, exist_ok=True)

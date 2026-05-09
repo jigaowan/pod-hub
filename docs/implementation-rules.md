@@ -21,6 +21,10 @@
 | `YTDLP_SOCKET_TIMEOUT` | 否 | `30` | `yt-dlp --socket-timeout`，缓解缩略图/TLS 握手超时 |
 | `YTDLP_RETRIES` | 否 | `5` | `yt-dlp --retries` |
 | `YTDLP_FRAGMENT_RETRIES` | 否 | `5` | `yt-dlp --fragment-retries` |
+| `ALARM_URL` | 否 | 无 | 抓取异常通知接口 URL |
+| `ALARM_CUSTOM_PSK` | 否 | 无 | 抓取异常通知接口 `X-Custom-PSK` 头 |
+| `ALARM_TG_USER_ID` | 否 | 无 | 抓取异常通知接口 `X-TGUser-ID` 头 |
+| `ALARM_TIMEOUT_SECONDS` | 否 | `10` | 通知接口请求超时时间 |
 
 ## 配置规则
 
@@ -28,6 +32,7 @@
 - `BASE_URL` 不允许以 `/` 结尾，入库和渲染前统一规范化。
 - `FETCH_BATCH_SIZE` 和 `SYNC_INTERVAL` 必须为正整数。
 - 若 `MEDIA_DIR`、`TMP_MEDIA_DIR` 或数据库父目录不存在，由应用启动时创建。
+- `ALARM_URL`、`ALARM_CUSTOM_PSK`、`ALARM_TG_USER_ID` 必须同时配置；三者均为空时关闭通知。
 
 ## `yt-dlp` 调用边界
 
@@ -61,6 +66,8 @@
 - 任务级错误写入 `sync_runs.error_message`。
 - `last_error` 与 `error_message` 建议保存截断摘要，长度上限统一为 `4096` 字符。
 - 完整异常堆栈仅进入日志，不写入数据库字段。
+- 自动调度同步发生抓取异常时，每个频道每轮最多发送一条通知；通知中的错误列表从本轮 `yt-dlp` 返回内容提取最简错误信息，去重后保留首次出现顺序。
+- 用户在后台新增频道时触发的来源解析失败不发送通知，只按页面错误处理。
 
 ## 日志规则
 

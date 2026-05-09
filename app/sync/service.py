@@ -14,7 +14,9 @@ from app.db.repositories import episodes as episode_repo
 from app.db.repositories import sync_runs as sync_run_repo
 from app.db.session import get_session_factory
 from app.downloader.client import YtDlpClient
+from app.notifications.client import AlarmNotifier
 from app.storage.media_store import MediaStore
+from app.sync.error_messages import collect_unique_errors, extract_ytdlp_error_message
 from app.sync.planner import plan_initial_fetches, plan_polling_fetches
 
 MAX_ERROR_LENGTH = 4096
@@ -32,11 +34,13 @@ class SyncService:
         downloader: YtDlpClient | None = None,
         media_store: MediaStore | None = None,
         session_factory: sessionmaker[Session] | None = None,
+        notifier: AlarmNotifier | None = None,
     ) -> None:
         self.settings = settings
         self.downloader = downloader or YtDlpClient(settings)
         self.media_store = media_store or MediaStore(settings)
         self.session_factory = session_factory or get_session_factory(settings)
+        self.notifier = notifier or AlarmNotifier(settings)
         self.logger = logging.getLogger("podhub.sync")
 
     def register_channel(self, source_input: str, cookie_text: str | None = None):
@@ -122,7 +126,7 @@ class SyncService:
         finally:
             session.close()
 
-    def sync_all_channels(self) -> None:
+    def sync_all_channels(self, *, notify: bool = False) -> None:
         session = self.session_factory()
         try:
             channel_ids = channel_repo.list_syncable_channel_ids(session)
@@ -130,7 +134,7 @@ class SyncService:
             session.close()
 
         for channel_id in channel_ids:
-            self.sync_channel(channel_id)
+            self.sync_channel(channel_id, notify=notify)
 
     def record_global_skip(self, reason: str) -> None:
         session = self.session_factory()
@@ -145,19 +149,22 @@ class SyncService:
         finally:
             session.close()
 
-    def sync_channel(self, channel_id: int) -> None:
+    def sync_channel(self, channel_id: int, *, notify: bool = False) -> None:
         session = self.session_factory()
         discovered_count = 0
         queued_count = 0
         fetched_count = 0
         failed_count = 0
         sync_run = None
+        notification_errors: list[str] = []
+        channel_name = f"channel_id={channel_id}"
 
         try:
             channel = channel_repo.get_channel(session, channel_id)
             if channel is None:
                 return
 
+            channel_name = channel.display_name
             is_initial_sync = channel.last_synced_at is None
             channel_repo.mark_sync_started(channel)
             sync_run = sync_run_repo.create_sync_run(session, channel.id)
@@ -234,6 +241,7 @@ class SyncService:
                     session.commit()
                 except Exception as exc:
                     failed_count += 1
+                    notification_errors.append(extract_ytdlp_error_message(exc))
                     episode_repo.set_episode_status(episode, "failed", last_error=summarize_error(exc))
                     session.commit()
                     self.logger.exception("episode sync failed channel_id=%s episode_id=%s", channel.id, episode.id)
@@ -252,10 +260,14 @@ class SyncService:
                     failed_count=failed_count,
                 )
             session.commit()
+            if notify:
+                self._notify_sync_errors(channel_name, notification_errors)
         except Exception as exc:
             session.rollback()
+            notification_errors.append(extract_ytdlp_error_message(exc))
             channel = channel_repo.get_channel(session, channel_id)
             if channel is not None:
+                channel_name = channel.display_name
                 channel_repo.mark_sync_failed(channel, summarize_error(exc))
             if sync_run is not None:
                 sync_run = session.get(type(sync_run), sync_run.id)
@@ -271,8 +283,15 @@ class SyncService:
                     )
             session.commit()
             self.logger.exception("channel sync failed channel_id=%s", channel_id)
+            if notify:
+                self._notify_sync_errors(channel_name, notification_errors)
         finally:
             session.close()
+
+    def _notify_sync_errors(self, channel_name: str, errors: list[str]) -> None:
+        unique_errors = collect_unique_errors(errors)
+        if unique_errors:
+            self.notifier.notify_sync_errors(channel_name=channel_name, errors=unique_errors)
 
     def _resolve_source(self, source_input: str, cookie_text: str | None = None):
         if self._is_standard_playlist_url(source_input):

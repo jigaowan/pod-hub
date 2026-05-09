@@ -252,7 +252,12 @@ class YtDlpClient:
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            raise DownloaderError(f"yt-dlp returned invalid JSON for {command_type}") from exc
+            error = DownloaderError(f"yt-dlp returned invalid JSON for {command_type}")
+            error.stdout = completed.stdout
+            error.stderr = completed.stderr
+            error.returncode = completed.returncode
+            error.command_type = command_type
+            raise error from exc
 
     def _run_command(
         self,
@@ -295,6 +300,7 @@ class YtDlpClient:
             error.stdout = completed.stdout
             error.stderr = completed.stderr
             error.returncode = completed.returncode
+            error.command_type = command_type
             raise error
 
         return completed

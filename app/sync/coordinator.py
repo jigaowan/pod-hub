@@ -20,6 +20,6 @@ class SyncCoordinator:
             return
 
         try:
-            self.sync_service.sync_all_channels()
+            self.sync_service.sync_all_channels(notify=True)
         finally:
             self._lock.release()
