@@ -49,6 +49,7 @@ class AlarmNotifier:
                 "X-Custom-PSK": self.settings.alarm_custom_psk,
                 "X-TGUser-ID": self.settings.alarm_tg_user_id,
                 "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "curl/8.7.1",
             },
         )
 

@@ -47,6 +47,7 @@ def test_alarm_notifier_sends_expected_post(monkeypatch, tmp_path: Path) -> None
     assert captured["headers"]["X-custom-psk"] == "12345"
     assert captured["headers"]["X-tguser-id"] == "67890"
     assert captured["headers"]["Content-type"] == "application/json; charset=utf-8"
+    assert captured["headers"]["User-agent"] == "curl/8.7.1"
     assert captured["timeout"] == 10
     assert json.loads(captured["body"].decode("utf-8")) == {
         "title": "Pod Hub 抓取异常: TED",
