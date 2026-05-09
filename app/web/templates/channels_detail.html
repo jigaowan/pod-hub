@@ -58,7 +58,16 @@
         </div>
         <div class="definition-row">
           <dt>最近错误</dt>
-          <dd class="muted">{{ channel.last_error or "-" }}</dd>
+          <dd>
+            {% if channel.last_error %}
+              <div class="error-summary">
+                <span class="error-snippet">{{ channel.last_error }}</span>
+                <button class="text-button" type="button" data-dialog-title="最近错误" data-dialog-body="{{ channel.last_error }}">查看全部</button>
+              </div>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </dd>
         </div>
       </dl>
       <p class="help-text">删除来源只会移除项目中的记录，已抓取文件不会从媒体目录删除。</p>
@@ -89,7 +98,16 @@
           </div>
           <div class="definition-row">
             <dt>错误</dt>
-            <dd class="muted">{{ sync_run.error_message or "-" }}</dd>
+            <dd>
+              {% if sync_run.error_message %}
+                <div class="error-summary">
+                  <span class="error-snippet">{{ sync_run.error_message }}</span>
+                  <button class="text-button" type="button" data-dialog-title="同步错误" data-dialog-body="{{ sync_run.error_message }}">查看全部</button>
+                </div>
+              {% else %}
+                <span class="muted">-</span>
+              {% endif %}
+            </dd>
           </div>
         </dl>
         <div class="metric-grid">
@@ -158,7 +176,15 @@
         <h2 class="section-title">节目列表</h2>
       </div>
       <div class="table-wrap">
-        <table class="responsive-table">
+        <table class="responsive-table admin-table episode-table">
+          <colgroup>
+            <col class="col-id">
+            <col class="col-title">
+            <col class="col-status">
+            <col class="col-published">
+            <col class="col-feed">
+            <col class="col-error">
+          </colgroup>
           <thead>
             <tr>
               <th>ID</th>
@@ -183,7 +209,16 @@
                   {% endif %}
                 </td>
                 <td data-label="是否进入 Feed">{{ "是" if episode.has_audio else "否" }}</td>
-                <td data-label="错误" class="muted">{{ episode.last_error or "-" }}</td>
+                <td data-label="错误">
+                  {% if episode.last_error %}
+                    <div class="error-summary">
+                      <span class="error-snippet">{{ episode.last_error }}</span>
+                      <button class="text-button" type="button" data-dialog-title="节目错误" data-dialog-body="{{ episode.last_error }}">查看全部</button>
+                    </div>
+                  {% else %}
+                    <span class="muted">-</span>
+                  {% endif %}
+                </td>
               </tr>
             {% else %}
               <tr>

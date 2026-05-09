@@ -138,6 +138,22 @@
         width: 100%;
         border-collapse: collapse;
       }
+      table.admin-table {
+        table-layout: fixed;
+      }
+      .channel-list-table .col-source { width: 13%; }
+      .channel-list-table .col-kind { width: 9%; }
+      .channel-list-table .col-feed { width: 25%; }
+      .channel-list-table .col-status { width: 7%; }
+      .channel-list-table .col-sync { width: 9%; }
+      .channel-list-table .col-error { width: 27%; }
+      .channel-list-table .col-actions { width: 10%; }
+      .episode-table .col-id { width: 6%; }
+      .episode-table .col-title { width: 34%; }
+      .episode-table .col-status { width: 10%; }
+      .episode-table .col-published { width: 16%; }
+      .episode-table .col-feed { width: 10%; }
+      .episode-table .col-error { width: 24%; }
       th, td {
         padding: 12px 14px;
         border-bottom: 1px solid var(--border);
@@ -202,6 +218,22 @@
       }
       .button.danger:hover {
         background: rgba(180, 35, 24, 0.07);
+      }
+      .text-button {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 650;
+        padding: 0;
+        text-align: left;
+      }
+      .text-button:hover {
+        color: var(--accent-hover);
+        text-decoration: underline;
+        text-underline-offset: 3px;
       }
       form { display: grid; gap: 10px; }
       form.inline-form {
@@ -297,6 +329,56 @@
         color: var(--muted);
         font-size: 0.84rem;
       }
+      .error-summary {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+      }
+      .error-snippet {
+        display: -webkit-box;
+        max-width: 100%;
+        overflow: hidden;
+        color: var(--muted);
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .message-dialog {
+        width: min(680px, calc(100vw - 32px));
+        max-height: min(640px, calc(100vh - 48px));
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--ink);
+        box-shadow: 0 20px 60px rgba(21, 23, 26, 0.22);
+      }
+      .message-dialog::backdrop {
+        background: rgba(21, 23, 26, 0.32);
+      }
+      .message-dialog-panel {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+      }
+      .message-dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .message-dialog-title {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .message-dialog-body {
+        max-height: min(420px, calc(100vh - 180px));
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--muted);
+        font: inherit;
+      }
       .form-panel {
         max-width: 780px;
       }
@@ -338,6 +420,9 @@
         }
         .table-wrap {
           overflow-x: visible;
+        }
+        table.admin-table {
+          table-layout: auto;
         }
         table.responsive-table,
         table.responsive-table thead,
@@ -392,6 +477,15 @@
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
+    <dialog class="message-dialog" id="message-dialog" aria-labelledby="message-dialog-title">
+      <form class="message-dialog-panel" method="dialog">
+        <div class="message-dialog-header">
+          <h2 class="message-dialog-title" id="message-dialog-title">详情</h2>
+          <button class="button secondary" type="submit">关闭</button>
+        </div>
+        <pre class="message-dialog-body" id="message-dialog-body"></pre>
+      </form>
+    </dialog>
     <script>
       const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
         year: "numeric",
@@ -416,6 +510,23 @@
         }
 
         element.textContent = localDateTimeFormatter.format(parsed);
+      }
+
+      const messageDialog = document.getElementById("message-dialog");
+      const messageDialogTitle = document.getElementById("message-dialog-title");
+      const messageDialogBody = document.getElementById("message-dialog-body");
+
+      for (const trigger of document.querySelectorAll("[data-dialog-body]")) {
+        trigger.addEventListener("click", () => {
+          messageDialogTitle.textContent = trigger.getAttribute("data-dialog-title") || "详情";
+          messageDialogBody.textContent = trigger.getAttribute("data-dialog-body") || "";
+
+          if (typeof messageDialog.showModal === "function") {
+            messageDialog.showModal();
+          } else {
+            window.alert(messageDialogBody.textContent);
+          }
+        });
       }
     </script>
   </body>

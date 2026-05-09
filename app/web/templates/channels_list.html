@@ -24,7 +24,16 @@
 
   <section class="surface section">
     <div class="table-wrap">
-      <table class="responsive-table">
+      <table class="responsive-table admin-table channel-list-table">
+        <colgroup>
+          <col class="col-source">
+          <col class="col-kind">
+          <col class="col-feed">
+          <col class="col-status">
+          <col class="col-sync">
+          <col class="col-error">
+          <col class="col-actions">
+        </colgroup>
         <thead>
           <tr>
             <th>来源</th>
@@ -56,7 +65,16 @@
                   -
                 {% endif %}
               </td>
-              <td data-label="最近错误" class="muted">{{ channel.last_error or "-" }}</td>
+              <td data-label="最近错误">
+                {% if channel.last_error %}
+                  <div class="error-summary">
+                    <span class="error-snippet">{{ channel.last_error }}</span>
+                    <button class="text-button" type="button" data-dialog-title="最近错误" data-dialog-body="{{ channel.last_error }}">查看全部</button>
+                  </div>
+                {% else %}
+                  <span class="muted">-</span>
+                {% endif %}
+              </td>
               <td data-label="操作">
                 <form class="inline-form" method="post" action="/admin/channels/{{ channel.slug }}/delete" onsubmit="return confirm('删除后只会移除项目中的来源记录，已抓取文件会保留。确定继续吗？');">
                   <button class="button danger" type="submit">删除来源</button>
