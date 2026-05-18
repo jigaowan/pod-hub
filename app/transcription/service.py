@@ -9,6 +9,7 @@ from app.config import Settings
 from app.db.repositories import episodes as episode_repo
 from app.db.repositories import transcripts as transcript_repo
 from app.db.session import get_session_factory
+from app.runtime_settings.service import RuntimeSettingsService
 from app.storage.media_store import MediaStore
 from app.sync.service import summarize_error
 from app.transcription.client import CloudflareTranscriptionClient
@@ -22,15 +23,23 @@ class TranscriptionService:
         client: CloudflareTranscriptionClient | None = None,
         media_store: MediaStore | None = None,
         session_factory: sessionmaker[Session] | None = None,
+        runtime_settings_service: RuntimeSettingsService | None = None,
     ) -> None:
         self.settings = settings
-        self.client = client or CloudflareTranscriptionClient(settings)
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(
+            settings,
+            session_factory=session_factory,
+        )
+        self.client = client or CloudflareTranscriptionClient(
+            settings,
+            runtime_settings_service=self.runtime_settings_service,
+        )
         self.media_store = media_store or MediaStore(settings)
         self.session_factory = session_factory or get_session_factory(settings)
         self.logger = logging.getLogger("podhub.transcription")
 
     def process_pending(self, *, limit: int = 1) -> int:
-        if not self.settings.transcription_configured:
+        if not self.runtime_settings_service.get_effective_settings().transcription_configured:
             return 0
 
         processed = 0

@@ -51,6 +51,28 @@
         margin: 0 auto;
         padding: 28px 24px 48px;
       }
+      .top-nav {
+        width: min(1180px, 100%);
+        margin: 0 auto;
+        padding: 14px 24px 0;
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      .nav-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        color: var(--muted);
+        font-weight: 650;
+      }
+      .nav-link:hover {
+        background: var(--surface);
+        color: var(--ink);
+        text-decoration: none;
+      }
       .page-header {
         display: flex;
         justify-content: space-between;
@@ -257,6 +279,9 @@
         margin: 0;
       }
       input[type="text"],
+      input[type="url"],
+      input[type="number"],
+      input[type="password"],
       textarea {
         width: 100%;
         padding: 10px 12px;
@@ -267,6 +292,9 @@
         font: inherit;
       }
       input[type="text"]::placeholder,
+      input[type="url"]::placeholder,
+      input[type="number"]::placeholder,
+      input[type="password"]::placeholder,
       textarea::placeholder { color: var(--faint); }
       textarea {
         min-height: 180px;
@@ -394,6 +422,18 @@
       .form-actions {
         margin-top: 4px;
       }
+      .field-row {
+        display: grid;
+        gap: 6px;
+      }
+      .field-meta {
+        color: var(--faint);
+        font-size: 0.82rem;
+      }
+      .settings-section {
+        display: grid;
+        gap: 14px;
+      }
       code {
         background: rgba(21, 23, 26, 0.06);
         padding: 2px 6px;
@@ -403,6 +443,14 @@
       @media (max-width: 760px) {
         .shell {
           padding: 20px 14px 36px;
+        }
+        .top-nav {
+          padding: 12px 14px 0;
+          justify-content: stretch;
+        }
+        .nav-link {
+          flex: 1;
+          justify-content: center;
         }
         .page-header {
           display: grid;
@@ -483,6 +531,10 @@
     </style>
   </head>
   <body>
+    <nav class="top-nav" aria-label="后台导航">
+      <a class="nav-link" href="/admin/channels">来源</a>
+      <a class="nav-link" href="/admin/settings">设置</a>
+    </nav>
     <main class="shell">
       {% block content %}{% endblock %}
     </main>

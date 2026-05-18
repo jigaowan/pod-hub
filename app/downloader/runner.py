@@ -12,13 +12,20 @@ import time
 
 from app.common.errors import DownloaderError
 from app.config import Settings
+from app.runtime_settings.service import RuntimeSettingsService
 
 MAX_ERROR_LENGTH = 4096
 
 
 class YtDlpRunner:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        runtime_settings_service: RuntimeSettingsService | None = None,
+    ) -> None:
         self.settings = settings
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(settings)
         self.logger = logging.getLogger("podhub.downloader.runner")
 
     def run_json(self, command_type: str, extra_args: list[str], cookie_text: str | None = None) -> dict:
@@ -41,17 +48,19 @@ class YtDlpRunner:
         timeout: int,
         cookie_text: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        runtime_settings = self.runtime_settings_service.get_effective_settings()
+
         command = [self.settings.ytdlp_bin]
-        if self.settings.ytdlp_proxy:
-            command.extend(["--proxy", self.settings.ytdlp_proxy])
+        if runtime_settings.ytdlp_proxy:
+            command.extend(["--proxy", runtime_settings.ytdlp_proxy])
         if self.settings.ytdlp_js_runtimes:
             command.extend(["--js-runtimes", self.settings.ytdlp_js_runtimes])
-        if self.settings.ytdlp_socket_timeout:
-            command.extend(["--socket-timeout", str(self.settings.ytdlp_socket_timeout)])
-        if self.settings.ytdlp_retries:
-            command.extend(["--retries", str(self.settings.ytdlp_retries)])
-        if self.settings.ytdlp_fragment_retries:
-            command.extend(["--fragment-retries", str(self.settings.ytdlp_fragment_retries)])
+        if runtime_settings.ytdlp_socket_timeout:
+            command.extend(["--socket-timeout", str(runtime_settings.ytdlp_socket_timeout)])
+        if runtime_settings.ytdlp_retries:
+            command.extend(["--retries", str(runtime_settings.ytdlp_retries)])
+        if runtime_settings.ytdlp_fragment_retries:
+            command.extend(["--fragment-retries", str(runtime_settings.ytdlp_fragment_retries)])
         with self._temporary_cookie_file(cookie_text) as cookie_path:
             if cookie_path is not None:
                 command.extend(["--cookies", str(cookie_path)])

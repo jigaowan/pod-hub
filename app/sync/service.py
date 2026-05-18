@@ -14,6 +14,7 @@ from app.db.session import get_session_factory
 from app.domain.status import EpisodeStatus, SyncRunStatus
 from app.downloader.client import YtDlpClient
 from app.notifications.client import AlarmNotifier
+from app.runtime_settings.service import RuntimeSettingsService
 from app.storage.media_store import MediaStore
 from app.sync.error_messages import collect_unique_errors, extract_ytdlp_error_message
 from app.sync.planner import plan_initial_fetches, plan_polling_fetches
@@ -34,12 +35,17 @@ class SyncService:
         media_store: MediaStore | None = None,
         session_factory: sessionmaker[Session] | None = None,
         notifier: AlarmNotifier | None = None,
+        runtime_settings_service: RuntimeSettingsService | None = None,
     ) -> None:
         self.settings = settings
-        self.downloader = downloader or YtDlpClient(settings)
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(
+            settings,
+            session_factory=session_factory,
+        )
+        self.downloader = downloader or YtDlpClient(settings, runtime_settings_service=self.runtime_settings_service)
         self.media_store = media_store or MediaStore(settings)
         self.session_factory = session_factory or get_session_factory(settings)
-        self.notifier = notifier or AlarmNotifier(settings)
+        self.notifier = notifier or AlarmNotifier(settings, runtime_settings_service=self.runtime_settings_service)
         self.logger = logging.getLogger("podhub.sync")
 
     def sync_all_channels(self, *, notify: bool = False) -> None:
@@ -76,6 +82,7 @@ class SyncService:
         channel_name = f"channel_id={channel_id}"
 
         try:
+            runtime_settings = self.runtime_settings_service.get_effective_settings()
             channel = channel_repo.get_channel(session, channel_id)
             if channel is None:
                 return
@@ -103,16 +110,16 @@ class SyncService:
                 candidates = episode_repo.list_recent_unfetched_episodes(
                     session,
                     channel.id,
-                    self.settings.fetch_batch_size,
+                    runtime_settings.fetch_batch_size,
                 )
-                selected_episodes = plan_initial_fetches(candidates, self.settings.fetch_batch_size)
+                selected_episodes = plan_initial_fetches(candidates, runtime_settings.fetch_batch_size)
             else:
                 new_candidates = episode_repo.list_new_unfetched_episodes(
                     session,
                     new_episode_ids,
-                    limit=self.settings.fetch_batch_size,
+                    limit=runtime_settings.fetch_batch_size,
                 )
-                remaining_slots = max(self.settings.fetch_batch_size - len(new_candidates), 0)
+                remaining_slots = max(runtime_settings.fetch_batch_size - len(new_candidates), 0)
                 backlog_candidates = []
                 if remaining_slots > 0:
                     backlog_candidates = episode_repo.list_backlog_unfetched_episodes(
@@ -124,7 +131,7 @@ class SyncService:
                 selected_episodes = plan_polling_fetches(
                     new_candidates=new_candidates,
                     backlog_candidates=backlog_candidates,
-                    batch_size=self.settings.fetch_batch_size,
+                    batch_size=runtime_settings.fetch_batch_size,
                 )
 
             for episode in selected_episodes:
@@ -153,7 +160,7 @@ class SyncService:
                         fetched_audio,
                         published_audio_path=str(published_path),
                     )
-                    if channel.transcription_enabled and self.settings.transcription_configured:
+                    if channel.transcription_enabled and runtime_settings.transcription_configured:
                         transcript_repo.mark_transcript_pending(episode)
                     fetched_count += 1
                     session.commit()

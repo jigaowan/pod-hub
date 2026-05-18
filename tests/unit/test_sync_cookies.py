@@ -11,6 +11,7 @@ from app.common.time import utc_now
 from app.config import Settings
 from app.db.base import Base
 from app.db.repositories import channels as channel_repo
+from app.db.repositories import settings as settings_repo
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio
 from app.storage.media_store import MediaStore
 from app.sync.service import SyncService
@@ -50,6 +51,50 @@ class CookieTrackingDownloader:
         temp_file_path.write_bytes(b"x" * 2048)
         return FetchedAudio(
             title="Video 1",
+            description=None,
+            upload_date=date(2026, 1, 1),
+            published_at=utc_now(),
+            duration_seconds=60,
+            thumbnail_url=None,
+            audio_mime_type=f"audio/{AUDIO_FILE_EXTENSION}",
+            audio_bytes=temp_file_path.stat().st_size,
+            temp_file_path=temp_file_path,
+        )
+
+
+class BatchTrackingDownloader:
+    def __init__(self) -> None:
+        self.fetched_urls: list[str] = []
+
+    def list_channel_episodes(self, source_url: str, cookie_text: str | None = None) -> list[DiscoveredEpisode]:
+        return [
+            DiscoveredEpisode(
+                source_video_id=f"video-{position}",
+                source_position=position,
+                webpage_url=f"https://www.youtube.com/watch?v=video-{position}",
+                title=f"Video {position}",
+                description=None,
+                upload_date=date(2026, 1, position),
+                published_at=utc_now(),
+                duration_seconds=60,
+                thumbnail_url=None,
+            )
+            for position in range(1, 4)
+        ]
+
+    def fetch_episode_audio(
+        self,
+        webpage_url: str,
+        episode_id: int,
+        temp_dir: Path,
+        cookie_text: str | None = None,
+    ) -> FetchedAudio:
+        self.fetched_urls.append(webpage_url)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_file_path = temp_dir / episode_storage_filename(webpage_url)
+        temp_file_path.write_bytes(b"x" * 2048)
+        return FetchedAudio(
+            title=webpage_url,
             description=None,
             upload_date=date(2026, 1, 1),
             published_at=utc_now(),
@@ -103,3 +148,39 @@ def test_sync_channel_passes_cookie_text_to_discovery_and_fetch(tmp_path: Path) 
 
     assert downloader.list_cookie_text == cookie_text
     assert downloader.fetch_cookie_text == cookie_text
+
+
+def test_sync_channel_uses_runtime_fetch_batch_size_override(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    session_factory = build_session_factory(database_path)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+        FETCH_BATCH_SIZE=1,
+    )
+    downloader = BatchTrackingDownloader()
+    service = SyncService(
+        settings,
+        downloader=downloader,
+        media_store=MediaStore(settings),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        channel = channel_repo.create_channel(
+            session,
+            source_kind="youtube_channel",
+            external_channel_id="UC123",
+            source_input="@demo",
+            source_url="https://www.youtube.com/@demo",
+            display_name="Demo",
+            slug="demo",
+        )
+        settings_repo.set_setting(session, "FETCH_BATCH_SIZE", "2")
+        session.commit()
+        channel_id = channel.id
+
+    service.sync_channel(channel_id)
+
+    assert len(downloader.fetched_urls) == 2

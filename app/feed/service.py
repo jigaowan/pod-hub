@@ -12,6 +12,7 @@ from app.db.repositories import episodes as episode_repo
 from app.db.session import get_session_factory
 from app.domain.status import TranscriptStatus
 from app.feed.schemas import FeedChannel, FeedEpisode
+from app.runtime_settings.service import RuntimeSettingsService
 
 PODCAST_NAMESPACE = "https://podcastindex.org/namespace/1.0"
 ET.register_namespace("podcast", PODCAST_NAMESPACE)
@@ -23,9 +24,14 @@ class FeedService:
         settings: Settings,
         *,
         session_factory: sessionmaker[Session] | None = None,
+        runtime_settings_service: RuntimeSettingsService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory or get_session_factory(settings)
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(
+            settings,
+            session_factory=session_factory,
+        )
 
     def render_channel_feed(self, channel_slug: str) -> str | None:
         session = self.session_factory()
@@ -35,6 +41,7 @@ class FeedService:
                 return None
 
             episodes = episode_repo.list_feed_ready_episodes(session, channel.id, channel.source_kind)
+            runtime_settings = self.runtime_settings_service.get_effective_settings()
             feed_channel = FeedChannel(
                 display_name=channel.display_name,
                 source_url=channel.source_url,
@@ -56,11 +63,11 @@ class FeedService:
                     for episode in episodes
                 ],
             )
-            return self._build_xml(feed_channel)
+            return self._build_xml(feed_channel, base_url=runtime_settings.base_url)
         finally:
             session.close()
 
-    def _build_xml(self, channel: FeedChannel) -> str:
+    def _build_xml(self, channel: FeedChannel, *, base_url: str) -> str:
         rss = ET.Element("rss", version="2.0")
         channel_element = ET.SubElement(rss, "channel")
 
@@ -86,7 +93,7 @@ class FeedService:
                 item,
                 "enclosure",
                 {
-                    "url": f"{self.settings.base_url}/media/{episode_media_filename(episode.id)}",
+                    "url": f"{base_url}/media/{episode_media_filename(episode.id)}",
                     "length": str(episode.audio_bytes or 0),
                     "type": episode.audio_mime_type or AUDIO_MIME_TYPE,
                 },
@@ -96,7 +103,7 @@ class FeedService:
                     item,
                     f"{{{PODCAST_NAMESPACE}}}transcript",
                     {
-                        "url": f"{self.settings.base_url}/transcripts/{episode.id}.vtt",
+                        "url": f"{base_url}/transcripts/{episode.id}.vtt",
                         "type": "text/vtt",
                         "rel": "captions",
                     },

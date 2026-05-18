@@ -11,6 +11,7 @@ from app.config import Settings
 from app.db.repositories import channels as channel_repo
 from app.db.session import get_session_factory
 from app.downloader.client import YtDlpClient
+from app.runtime_settings.service import RuntimeSettingsService
 from app.storage.media_store import MediaStore
 
 
@@ -22,9 +23,14 @@ class ChannelService:
         downloader: YtDlpClient | None = None,
         media_store: MediaStore | None = None,
         session_factory: sessionmaker[Session] | None = None,
+        runtime_settings_service: RuntimeSettingsService | None = None,
     ) -> None:
         self.settings = settings
-        self.downloader = downloader or YtDlpClient(settings)
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(
+            settings,
+            session_factory=session_factory,
+        )
+        self.downloader = downloader or YtDlpClient(settings, runtime_settings_service=self.runtime_settings_service)
         self.media_store = media_store or MediaStore(settings)
         self.session_factory = session_factory or get_session_factory(settings)
         self.logger = logging.getLogger("podhub.channels")

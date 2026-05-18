@@ -10,12 +10,19 @@ from app.common.time import parse_upload_date, published_at_from_upload_date
 from app.config import Settings
 from app.downloader.runner import YtDlpRunner
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio, ResolvedSource
+from app.runtime_settings.service import RuntimeSettingsService
 
 
 class YtDlpClient:
-    def __init__(self, settings: Settings, *, runner: YtDlpRunner | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        runner: YtDlpRunner | None = None,
+        runtime_settings_service: RuntimeSettingsService | None = None,
+    ) -> None:
         self.settings = settings
-        self.runner = runner or YtDlpRunner(settings)
+        self.runner = runner or YtDlpRunner(settings, runtime_settings_service=runtime_settings_service)
         self.logger = logging.getLogger("podhub.downloader")
 
     def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:

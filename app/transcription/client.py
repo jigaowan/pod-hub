@@ -7,6 +7,7 @@ from urllib import error, request
 
 from app.common.errors import PodHubError
 from app.config import Settings
+from app.runtime_settings.service import RuntimeSettingsService
 
 
 class TranscriptionError(PodHubError):
@@ -14,22 +15,29 @@ class TranscriptionError(PodHubError):
 
 
 class CloudflareTranscriptionClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        runtime_settings_service: RuntimeSettingsService | None = None,
+    ) -> None:
         self.settings = settings
+        self.runtime_settings_service = runtime_settings_service or RuntimeSettingsService(settings)
 
     def transcribe_to_vtt(self, audio_path: Path) -> str:
-        if not self.settings.transcription_configured:
+        runtime_settings = self.runtime_settings_service.get_effective_settings()
+        if not runtime_settings.transcription_configured:
             raise TranscriptionError("Cloudflare transcription is not configured")
-        if self.settings.cloudflare_whisper_url is None or self.settings.cloudflare_api_token is None:
+        if runtime_settings.cloudflare_whisper_url is None or runtime_settings.cloudflare_api_token is None:
             raise TranscriptionError("Cloudflare transcription is not configured")
 
         audio_base64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
         payload = json.dumps({"audio": audio_base64}).encode("utf-8")
         transcription_request = request.Request(
-            self.settings.cloudflare_whisper_url,
+            runtime_settings.cloudflare_whisper_url,
             data=payload,
             headers={
-                "Authorization": f"Bearer {self.settings.cloudflare_api_token}",
+                "Authorization": f"Bearer {runtime_settings.cloudflare_api_token}",
                 "Content-Type": "application/json",
             },
             method="POST",

@@ -10,6 +10,7 @@ from app.common.logging import configure_logging
 from app.config import get_settings
 from app.db.session import init_db
 from app.feed.service import FeedService
+from app.runtime_settings.service import RuntimeSettingsService
 from app.scheduler.jobs import create_scheduler
 from app.storage.media_store import MediaStore
 from app.sync.coordinator import SyncCoordinator
@@ -22,11 +23,24 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    runtime_settings_service = RuntimeSettingsService(settings)
     media_store = MediaStore(settings)
-    channel_service = ChannelService(settings, media_store=media_store)
-    sync_service = SyncService(settings, media_store=media_store)
-    transcription_service = TranscriptionService(settings, media_store=media_store)
-    feed_service = FeedService(settings)
+    channel_service = ChannelService(
+        settings,
+        media_store=media_store,
+        runtime_settings_service=runtime_settings_service,
+    )
+    sync_service = SyncService(
+        settings,
+        media_store=media_store,
+        runtime_settings_service=runtime_settings_service,
+    )
+    transcription_service = TranscriptionService(
+        settings,
+        media_store=media_store,
+        runtime_settings_service=runtime_settings_service,
+    )
+    feed_service = FeedService(settings, runtime_settings_service=runtime_settings_service)
     sync_coordinator = SyncCoordinator(sync_service)
 
     @asynccontextmanager
@@ -41,6 +55,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Pod Hub", lifespan=lifespan)
     app.state.settings = settings
+    app.state.runtime_settings_service = runtime_settings_service
     app.state.media_store = media_store
     app.state.channel_service = channel_service
     app.state.sync_service = sync_service

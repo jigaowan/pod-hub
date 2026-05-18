@@ -1,8 +1,14 @@
 import subprocess
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
 from app.config import Settings
+from app.db.base import Base
+from app.db.repositories import settings as settings_repo
 from app.downloader.client import YtDlpClient
+from app.runtime_settings.service import RuntimeSettingsService
 
 
 def build_client(tmp_path: Path) -> YtDlpClient:
@@ -138,3 +144,36 @@ def test_run_command_writes_cookie_text_to_temporary_file(monkeypatch, tmp_path:
 
     assert captured_cookie_path is not None
     assert not captured_cookie_path.exists()
+
+
+def test_run_command_uses_runtime_ytdlp_overrides(monkeypatch, tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+    with session_factory() as session:
+        settings_repo.set_setting(session, "YTDLP_PROXY", "http://127.0.0.1:7890")
+        settings_repo.set_setting(session, "YTDLP_RETRIES", "9")
+        session.commit()
+    client = YtDlpClient(
+        settings,
+        runtime_settings_service=RuntimeSettingsService(settings, session_factory=session_factory),
+    )
+    captured_command: list[str] = []
+
+    def fake_run(command, **kwargs):
+        captured_command.extend(command)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("app.downloader.runner.subprocess.run", fake_run)
+
+    client._run_command("test", ["--dump-single-json", "https://example.com"], timeout=1)
+
+    assert ["--proxy", "http://127.0.0.1:7890"] == captured_command[1:3]
+    assert "--retries" in captured_command
+    assert "9" in captured_command

@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
 from app.config import Settings
+from app.db.base import Base
+from app.db.repositories import settings as settings_repo
 from app.notifications.client import AlarmNotifier
+from app.runtime_settings.service import RuntimeSettingsService
 
 
 def build_settings(tmp_path: Path) -> Settings:
@@ -65,3 +71,44 @@ def test_alarm_notifier_failure_does_not_raise(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr("app.notifications.client.request.urlopen", fake_urlopen)
 
     notifier.notify_sync_errors(channel_name="TED", errors=["Unable to extract data"])
+
+
+def test_alarm_notifier_uses_runtime_overrides(monkeypatch, tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+    with session_factory() as session:
+        settings_repo.set_setting(session, "ALARM_URL", "https://alarm.example.com")
+        settings_repo.set_setting(session, "ALARM_CUSTOM_PSK", "db-psk")
+        settings_repo.set_setting(session, "ALARM_TG_USER_ID", "db-user")
+        session.commit()
+    notifier = AlarmNotifier(
+        settings,
+        runtime_settings_service=RuntimeSettingsService(settings, session_factory=session_factory),
+    )
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_urlopen(alarm_request, timeout: int):
+        captured["url"] = alarm_request.full_url
+        captured["headers"] = alarm_request.headers
+        return Response()
+
+    monkeypatch.setattr("app.notifications.client.request.urlopen", fake_urlopen)
+
+    notifier.notify_sync_errors(channel_name="TED", errors=["failed"])
+
+    assert captured["url"] == "https://alarm.example.com"
+    assert captured["headers"]["X-custom-psk"] == "db-psk"

@@ -32,6 +32,13 @@ def get_next_sync_at(request: Request):
     return job.next_run_time
 
 
+def reschedule_channel_sync(request: Request, sync_interval: int) -> None:
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        return
+    scheduler.reschedule_job("channel-sync", trigger="interval", minutes=sync_interval)
+
+
 @router.get("/admin/channels", response_class=HTMLResponse)
 def list_channels(request: Request) -> HTMLResponse:
     session_factory = get_session_factory(request.app.state.settings)
@@ -63,6 +70,47 @@ def new_channel_form(request: Request) -> HTMLResponse:
             "next_sync_at": get_next_sync_at(request),
         },
     )
+
+
+@router.get("/admin/settings", response_class=HTMLResponse)
+def settings_form(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        name="settings.html",
+        request=request,
+        context={
+            "settings_view": request.app.state.runtime_settings_service.get_admin_view(),
+            "form_values": {},
+            "error": None,
+            "saved": request.query_params.get("saved") == "1",
+        },
+    )
+
+
+@router.post("/admin/settings", response_class=HTMLResponse)
+async def update_settings(request: Request) -> HTMLResponse:
+    form = await request.form()
+    form_values = {
+        key: str(value)
+        for key, value in form.items()
+        if key not in {"alarm_custom_psk", "alarm_tg_user_id", "cloudflare_api_token"}
+    }
+    try:
+        effective_settings = request.app.state.runtime_settings_service.save_form(form)
+        reschedule_channel_sync(request, effective_settings.sync_interval)
+    except PodHubError as exc:
+        return templates.TemplateResponse(
+            name="settings.html",
+            request=request,
+            context={
+                "settings_view": request.app.state.runtime_settings_service.get_admin_view(),
+                "form_values": form_values,
+                "error": str(exc),
+                "saved": False,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return RedirectResponse(url="/admin/settings?saved=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/admin/channels", response_class=HTMLResponse)
