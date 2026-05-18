@@ -6,6 +6,7 @@ from datetime import datetime
 from app.db.models.channel import Channel
 from app.db.models.episode import Episode
 from app.db.models.sync_run import SyncRun
+from app.domain.status import EpisodeStatus, TranscriptStatus
 
 
 @dataclass(slots=True)
@@ -26,6 +27,9 @@ class EpisodeItemView:
     status: str
     published_at: datetime | None
     has_audio: bool
+    transcript_status: str
+    has_transcript: bool
+    transcript_error: str | None
     last_error: str | None
 
 
@@ -63,7 +67,10 @@ def to_episode_items(episodes: list[Episode]) -> list[EpisodeItemView]:
             title=episode.title,
             status=episode.status,
             published_at=episode.published_at,
-            has_audio=episode.status == "audio_ready" and bool(episode.audio_path),
+            has_audio=episode.status == EpisodeStatus.AUDIO_READY and bool(episode.audio_path),
+            transcript_status=episode.transcript_status,
+            has_transcript=episode.transcript_status == TranscriptStatus.READY and bool(episode.transcript_path),
+            transcript_error=episode.transcript_error,
             last_error=episode.last_error,
         )
         for episode in episodes

@@ -85,6 +85,63 @@ def test_feed_service_only_renders_audio_ready_items(tmp_path: Path) -> None:
     assert '<guid isPermaLink="false">podhub:youtube:UC123:video-ready</guid>' in xml
 
 
+def test_feed_service_renders_podcast_transcript_for_ready_vtt(tmp_path: Path) -> None:
+    database_path = tmp_path / "podhub.db"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+    with session_factory() as session:
+        channel = Channel(
+            source_kind="youtube_channel",
+            external_channel_id="UC123",
+            source_input="@demo",
+            source_url="https://www.youtube.com/@demo",
+            display_name="Demo Channel",
+            slug="demo-channel",
+            status="active",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        session.add(channel)
+        session.flush()
+        session.add(
+            Episode(
+                channel_id=channel.id,
+                source_video_id="video-ready",
+                webpage_url="https://www.youtube.com/watch?v=video-ready",
+                title="Ready Episode",
+                description="Ready",
+                published_at=datetime(2025, 1, 1, tzinfo=UTC),
+                listed_at=datetime.now(UTC),
+                status="audio_ready",
+                audio_path="/tmp/1.m4a",
+                audio_mime_type="audio/mp4",
+                audio_bytes=123,
+                transcript_status="ready",
+                transcript_path="/tmp/1.vtt",
+                transcript_mime_type="text/vtt",
+                transcript_bytes=45,
+                transcript_generated_at=datetime.now(UTC),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        DATABASE_PATH=str(database_path),
+    )
+    service = FeedService(settings, session_factory=session_factory)
+    xml = service.render_channel_feed("demo-channel")
+
+    assert xml is not None
+    assert 'xmlns:podcast="https://podcastindex.org/namespace/1.0"' in xml
+    assert '<podcast:transcript url="https://podhub.example.com/transcripts/1.vtt" type="text/vtt" rel="captions" />' in xml
+
+
 def test_feed_service_orders_playlist_items_by_youtube_position(tmp_path: Path) -> None:
     database_path = tmp_path / "podhub.db"
     engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})

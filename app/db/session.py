@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
@@ -46,32 +46,6 @@ def get_session_factory(settings: Settings | None = None) -> sessionmaker[Sessio
 def init_db(settings: Settings | None = None) -> None:
     engine = get_engine(settings)
     Base.metadata.create_all(bind=engine)
-    ensure_schema_compatibility(engine)
-
-
-def ensure_schema_compatibility(engine: Engine) -> None:
-    inspector = inspect(engine)
-    if "channels" not in inspector.get_table_names():
-        return
-
-    channel_columns = {column["name"] for column in inspector.get_columns("channels")}
-    if "cookie_text" not in channel_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE channels ADD COLUMN cookie_text TEXT"))
-
-    if "episodes" not in inspector.get_table_names():
-        return
-
-    episode_columns = {column["name"] for column in inspector.get_columns("episodes")}
-    if "source_position" not in episode_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE episodes ADD COLUMN source_position INTEGER"))
-            connection.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_episodes_channel_source_position "
-                    "ON episodes (channel_id, source_position)"
-                )
-            )
 
 
 @contextmanager

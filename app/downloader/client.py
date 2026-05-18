@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-import json
 import logging
-import os
-import subprocess
-import tempfile
-import time
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
@@ -15,14 +8,14 @@ from app.common.errors import DownloaderError, SourceResolutionError
 from app.common.media import AUDIO_FILE_EXTENSION, AUDIO_MIME_TYPE, episode_storage_filename
 from app.common.time import parse_upload_date, published_at_from_upload_date
 from app.config import Settings
+from app.downloader.runner import YtDlpRunner
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio, ResolvedSource
-
-MAX_ERROR_LENGTH = 4096
 
 
 class YtDlpClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, runner: YtDlpRunner | None = None) -> None:
         self.settings = settings
+        self.runner = runner or YtDlpRunner(settings)
         self.logger = logging.getLogger("podhub.downloader")
 
     def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
@@ -248,16 +241,7 @@ class YtDlpClient:
         )
 
     def _run_json(self, command_type: str, extra_args: list[str], cookie_text: str | None = None) -> dict:
-        completed = self._run_command(command_type, [*extra_args], timeout=1800, cookie_text=cookie_text)
-        try:
-            return json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            error = DownloaderError(f"yt-dlp returned invalid JSON for {command_type}")
-            error.stdout = completed.stdout
-            error.stderr = completed.stderr
-            error.returncode = completed.returncode
-            error.command_type = command_type
-            raise error from exc
+        return self.runner.run_json(command_type, extra_args, cookie_text=cookie_text)
 
     def _run_command(
         self,
@@ -266,72 +250,8 @@ class YtDlpClient:
         *,
         timeout: int,
         cookie_text: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        command = [self.settings.ytdlp_bin]
-        if self.settings.ytdlp_proxy:
-            command.extend(["--proxy", self.settings.ytdlp_proxy])
-        js_runtimes = self._select_js_runtimes()
-        if js_runtimes:
-            command.extend(["--js-runtimes", js_runtimes])
-        if self.settings.ytdlp_socket_timeout:
-            command.extend(["--socket-timeout", str(self.settings.ytdlp_socket_timeout)])
-        if self.settings.ytdlp_retries:
-            command.extend(["--retries", str(self.settings.ytdlp_retries)])
-        if self.settings.ytdlp_fragment_retries:
-            command.extend(["--fragment-retries", str(self.settings.ytdlp_fragment_retries)])
-        with self._temporary_cookie_file(cookie_text) as cookie_path:
-            if cookie_path is not None:
-                command.extend(["--cookies", str(cookie_path)])
-            command.extend(extra_args)
-            started = time.monotonic()
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        duration = time.monotonic() - started
-        self.logger.info("yt-dlp command=%s duration=%.3fs returncode=%s", command_type, duration, completed.returncode)
-
-        if completed.returncode != 0:
-            stderr = self._summarize_error(completed.stderr or completed.stdout)
-            error = DownloaderError(f"{command_type} failed: {stderr}")
-            error.stdout = completed.stdout
-            error.stderr = completed.stderr
-            error.returncode = completed.returncode
-            error.command_type = command_type
-            raise error
-
-        return completed
-
-    @contextmanager
-    def _temporary_cookie_file(self, cookie_text: str | None) -> Iterator[Path | None]:
-        if cookie_text is None:
-            yield None
-            return
-
-        self.settings.tmp_media_dir.mkdir(parents=True, exist_ok=True)
-        temp_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.settings.tmp_media_dir,
-                prefix="yt-dlp-cookies-",
-                suffix=".txt",
-                delete=False,
-            ) as temp_file:
-                temp_file.write(cookie_text)
-                temp_path = Path(temp_file.name)
-            os.chmod(temp_path, 0o600)
-            yield temp_path
-        finally:
-            if temp_path is not None and temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError:
-                    pass
+    ):
+        return self.runner.run_command(command_type, extra_args, timeout=timeout, cookie_text=cookie_text)
 
     def _normalize_source_input(self, source_input: str) -> str:
         value = source_input.strip()
@@ -360,13 +280,6 @@ class YtDlpClient:
         query = parse_qs(parsed.query)
         list_ids = query.get("list") or []
         return list_ids[0] if list_ids else None
-
-    def _summarize_error(self, value: str) -> str:
-        cleaned = " ".join(value.split())
-        return cleaned[:MAX_ERROR_LENGTH]
-
-    def _select_js_runtimes(self) -> str | None:
-        return self.settings.ytdlp_js_runtimes
 
     def _looks_like_thumbnail_or_embed_failure(self, stderr: str) -> bool:
         lowered = (stderr or "").lower()

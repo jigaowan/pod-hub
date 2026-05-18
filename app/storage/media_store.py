@@ -25,6 +25,22 @@ class MediaStore:
         self._publish_temp_file(temp_file_path, final_path)
         return final_path
 
+    def publish_transcript(self, transcript_text: str, channel_dirname: str, source_video_id: str) -> Path:
+        final_path = self.settings.media_dir / channel_dirname / f"{source_video_id}.vtt"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=self.settings.tmp_media_dir,
+            prefix=f"{source_video_id}-",
+            suffix=".vtt",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(transcript_text)
+            temp_path = Path(temp_file.name)
+        self._publish_temp_file(temp_path, final_path)
+        return final_path
+
     def cleanup_temp_dir(self, episode_id: int) -> None:
         temp_dir = self.temp_dir_for_episode(episode_id)
         if temp_dir.exists():

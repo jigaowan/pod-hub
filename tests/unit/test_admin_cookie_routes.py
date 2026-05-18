@@ -8,14 +8,21 @@ from app.common.errors import ValidationError
 from app.web.routes import admin
 
 
-class RejectingSyncService:
-    def register_channel(self, source_input: str, cookie_text: str | None = None):
+class RejectingChannelService:
+    def register_channel(
+        self,
+        source_input: str,
+        cookie_text: str | None = None,
+        *,
+        transcription_enabled: bool = False,
+    ):
         assert source_input == "@demo"
         assert cookie_text == "SID=secret"
+        assert transcription_enabled is False
         raise ValidationError("bad cookie")
 
 
-class CookieUpdateSyncService:
+class CookieUpdateChannelService:
     def __init__(self) -> None:
         self.updated_cookie_text = None
         self.deleted = False
@@ -31,8 +38,8 @@ class CookieUpdateSyncService:
         return True
 
 
-def build_request(sync_service) -> Request:
-    app = SimpleNamespace(state=SimpleNamespace(sync_service=sync_service))
+def build_request(channel_service) -> Request:
+    app = SimpleNamespace(state=SimpleNamespace(channel_service=channel_service))
     return Request(
         {
             "type": "http",
@@ -46,9 +53,10 @@ def build_request(sync_service) -> Request:
 
 def test_create_channel_error_does_not_echo_cookie_text() -> None:
     response = admin.create_channel(
-        build_request(RejectingSyncService()),
+        build_request(RejectingChannelService()),
         source_input="@demo",
         cookie_text="SID=secret",
+        transcription_enabled=False,
     )
 
     assert response.status_code == 400
@@ -59,22 +67,22 @@ def test_create_channel_error_does_not_echo_cookie_text() -> None:
 
 
 def test_update_channel_cookie_route_redirects_without_echoing_cookie_text() -> None:
-    sync_service = CookieUpdateSyncService()
+    channel_service = CookieUpdateChannelService()
     response = admin.update_channel_cookie(
-        build_request(sync_service),
+        build_request(channel_service),
         channel_slug="demo",
         cookie_text="# Netscape HTTP Cookie File\n",
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/channels/demo"
-    assert sync_service.updated_cookie_text == "# Netscape HTTP Cookie File\n"
+    assert channel_service.updated_cookie_text == "# Netscape HTTP Cookie File\n"
 
 
 def test_delete_channel_cookie_route_redirects() -> None:
-    sync_service = CookieUpdateSyncService()
-    response = admin.delete_channel_cookie(build_request(sync_service), channel_slug="demo")
+    channel_service = CookieUpdateChannelService()
+    response = admin.delete_channel_cookie(build_request(channel_service), channel_slug="demo")
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/channels/demo"
-    assert sync_service.deleted is True
+    assert channel_service.deleted is True

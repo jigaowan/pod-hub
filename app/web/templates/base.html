@@ -149,11 +149,12 @@
       .channel-list-table .col-error { width: 27%; }
       .channel-list-table .col-actions { width: 10%; }
       .episode-table .col-id { width: 6%; }
-      .episode-table .col-title { width: 34%; }
+      .episode-table .col-title { width: 30%; }
       .episode-table .col-status { width: 10%; }
-      .episode-table .col-published { width: 16%; }
+      .episode-table .col-published { width: 14%; }
       .episode-table .col-feed { width: 10%; }
-      .episode-table .col-error { width: 24%; }
+      .episode-table .col-transcript { width: 10%; }
+      .episode-table .col-error { width: 20%; }
       th, td {
         padding: 12px 14px;
         border-bottom: 1px solid var(--border);
@@ -246,6 +247,14 @@
       label {
         color: var(--ink);
         font-weight: 650;
+      }
+      .checkbox-row {
+        align-items: center;
+        display: inline-flex;
+        gap: 8px;
+      }
+      .checkbox-row input {
+        margin: 0;
       }
       input[type="text"],
       textarea {

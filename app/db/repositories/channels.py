@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.common.slug import slugify, unique_slug
 from app.common.time import utc_now
 from app.db.models.channel import Channel
+from app.domain.status import ChannelStatus
 
 
 def list_channels(session: Session) -> list[Channel]:
@@ -18,7 +19,7 @@ def list_channels(session: Session) -> list[Channel]:
 def list_syncable_channel_ids(session: Session) -> list[int]:
     stmt = (
         select(Channel.id)
-        .where(Channel.status.in_(("pending_initial_sync", "active", "error")))
+        .where(Channel.status.in_((ChannelStatus.PENDING_INITIAL_SYNC, ChannelStatus.ACTIVE, ChannelStatus.ERROR)))
         .order_by(Channel.created_at.asc(), Channel.id.asc())
     )
     return list(session.scalars(stmt))
@@ -53,7 +54,8 @@ def create_channel(
     display_name: str,
     slug: str,
     cookie_text: str | None = None,
-    status: str = "pending_initial_sync",
+    transcription_enabled: bool = False,
+    status: str = ChannelStatus.PENDING_INITIAL_SYNC,
 ) -> Channel:
     now = utc_now()
     channel = Channel(
@@ -64,6 +66,7 @@ def create_channel(
         display_name=display_name,
         slug=slug,
         cookie_text=cookie_text,
+        transcription_enabled=transcription_enabled,
         status=status,
         created_at=now,
         updated_at=now,
@@ -78,24 +81,29 @@ def update_cookie_text(channel: Channel, cookie_text: str | None) -> None:
     channel.updated_at = utc_now()
 
 
+def update_transcription_enabled(channel: Channel, transcription_enabled: bool) -> None:
+    channel.transcription_enabled = transcription_enabled
+    channel.updated_at = utc_now()
+
+
 def delete_channel(session: Session, channel: Channel) -> None:
     session.delete(channel)
     session.flush()
 
 
 def mark_sync_started(channel: Channel) -> None:
-    channel.status = "syncing"
+    channel.status = ChannelStatus.SYNCING
     channel.updated_at = utc_now()
 
 
 def mark_sync_succeeded(channel: Channel, finished_at: datetime) -> None:
-    channel.status = "active"
+    channel.status = ChannelStatus.ACTIVE
     channel.last_synced_at = finished_at
     channel.last_error = None
     channel.updated_at = finished_at
 
 
 def mark_sync_failed(channel: Channel, error_message: str) -> None:
-    channel.status = "error"
+    channel.status = ChannelStatus.ERROR
     channel.last_error = error_message
     channel.updated_at = utc_now()

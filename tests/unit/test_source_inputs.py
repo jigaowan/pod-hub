@@ -5,12 +5,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.common.errors import ValidationError
+from app.channels.service import ChannelService
 from app.config import Settings
 from app.db.base import Base
 from app.db.models.channel import Channel
 from app.downloader.schemas import ResolvedSource
 from app.storage.media_store import MediaStore
-from app.sync.service import SyncService
 
 
 class PlaylistOnlyDownloader:
@@ -56,7 +56,7 @@ def test_register_playlist_source_kind(tmp_path: Path) -> None:
         DATABASE_PATH=str(database_path),
     )
     downloader = PlaylistOnlyDownloader()
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=downloader,
         media_store=MediaStore(settings),
@@ -84,7 +84,7 @@ def test_register_channel_saves_cookie_text_and_uses_it_for_resolution(tmp_path:
         DATABASE_PATH=str(database_path),
     )
     downloader = PlaylistOnlyDownloader()
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=downloader,
         media_store=MediaStore(settings),
@@ -109,7 +109,7 @@ def test_register_channel_rejects_invalid_cookie_text(tmp_path: Path) -> None:
         MEDIA_DIR=str(tmp_path / "media"),
         DATABASE_PATH=str(database_path),
     )
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=PlaylistOnlyDownloader(),
         media_store=MediaStore(settings),
@@ -142,7 +142,7 @@ def test_register_playlist_uses_unicode_slug(tmp_path: Path) -> None:
         def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
             raise AssertionError("resolve_channel should not be called for playlist URLs")
 
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=UnicodePlaylistDownloader(),
         media_store=MediaStore(settings),
@@ -179,7 +179,7 @@ def test_register_playlist_uses_external_id_when_name_has_no_slug_chars(tmp_path
         def resolve_channel(self, source_input: str, cookie_text: str | None = None) -> ResolvedSource:
             raise AssertionError("resolve_channel should not be called for playlist URLs")
 
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=SymbolOnlyPlaylistDownloader(),
         media_store=MediaStore(settings),
@@ -202,7 +202,7 @@ def test_register_rejects_non_standard_playlist_url(tmp_path: Path) -> None:
         MEDIA_DIR=str(tmp_path / "media"),
         DATABASE_PATH=str(database_path),
     )
-    service = SyncService(
+    service = ChannelService(
         settings,
         downloader=RejectingDownloader(),
         media_store=MediaStore(settings),

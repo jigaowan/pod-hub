@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.common.cookies import normalize_cookie_text
-from app.common.errors import ValidationError
 from app.common.time import utc_now
 from app.config import Settings
 from app.db.repositories import channels as channel_repo
 from app.db.repositories import episodes as episode_repo
 from app.db.repositories import sync_runs as sync_run_repo
+from app.db.repositories import transcripts as transcript_repo
 from app.db.session import get_session_factory
+from app.domain.status import EpisodeStatus, SyncRunStatus
 from app.downloader.client import YtDlpClient
 from app.notifications.client import AlarmNotifier
 from app.storage.media_store import MediaStore
@@ -42,89 +41,6 @@ class SyncService:
         self.session_factory = session_factory or get_session_factory(settings)
         self.notifier = notifier or AlarmNotifier(settings)
         self.logger = logging.getLogger("podhub.sync")
-
-    def register_channel(self, source_input: str, cookie_text: str | None = None):
-        cleaned = source_input.strip()
-        if not cleaned:
-            raise ValidationError("source_input is required")
-        normalized_cookie_text = normalize_cookie_text(cookie_text)
-
-        resolved = self._resolve_source(cleaned, normalized_cookie_text)
-
-        session = self.session_factory()
-        try:
-            existing = channel_repo.get_channel_by_external_id(session, resolved.external_id)
-            if existing is not None:
-                raise ValidationError("This source is already registered")
-
-            slug = channel_repo.allocate_slug(
-                session,
-                resolved.display_name,
-                fallback=resolved.external_id,
-            )
-            channel = channel_repo.create_channel(
-                session,
-                source_kind=resolved.source_kind,
-                external_channel_id=resolved.external_id,
-                source_input=cleaned,
-                source_url=resolved.source_url,
-                display_name=resolved.display_name,
-                slug=slug,
-                cookie_text=normalized_cookie_text,
-            )
-            session.commit()
-            if resolved.cover_url:
-                try:
-                    self.media_store.save_channel_cover(resolved.cover_url, channel.slug)
-                except Exception:
-                    self.logger.exception(
-                        "channel cover download failed channel_id=%s source_url=%s",
-                        channel.id,
-                        resolved.cover_url,
-                    )
-            return channel
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def update_channel_cookie(self, channel_slug: str, cookie_text: str | None) -> bool:
-        normalized_cookie_text = normalize_cookie_text(cookie_text)
-
-        session = self.session_factory()
-        try:
-            channel = channel_repo.get_channel_by_slug(session, channel_slug)
-            if channel is None:
-                return False
-
-            channel_repo.update_cookie_text(channel, normalized_cookie_text)
-            session.commit()
-            return True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def delete_channel_cookie(self, channel_slug: str) -> bool:
-        return self.update_channel_cookie(channel_slug, None)
-
-    def delete_channel(self, channel_slug: str) -> bool:
-        session = self.session_factory()
-        try:
-            channel = channel_repo.get_channel_by_slug(session, channel_slug)
-            if channel is None:
-                return False
-
-            channel_repo.delete_channel(session, channel)
-            session.commit()
-            return True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def sync_all_channels(self, *, notify: bool = False) -> None:
         session = self.session_factory()
@@ -212,14 +128,14 @@ class SyncService:
                 )
 
             for episode in selected_episodes:
-                episode_repo.set_episode_status(episode, "queued")
+                episode_repo.set_episode_status(episode, EpisodeStatus.QUEUED)
             queued_count = len(selected_episodes)
             session.commit()
 
             for episode in selected_episodes:
                 temp_dir = self.media_store.temp_dir_for_episode(episode.id)
                 try:
-                    episode_repo.set_episode_status(episode, "fetching")
+                    episode_repo.set_episode_status(episode, EpisodeStatus.FETCHING)
                     session.commit()
 
                     fetched_audio = self.downloader.fetch_episode_audio(
@@ -237,12 +153,14 @@ class SyncService:
                         fetched_audio,
                         published_audio_path=str(published_path),
                     )
+                    if channel.transcription_enabled and self.settings.transcription_configured:
+                        transcript_repo.mark_transcript_pending(episode)
                     fetched_count += 1
                     session.commit()
                 except Exception as exc:
                     failed_count += 1
                     notification_errors.append(extract_ytdlp_error_message(exc))
-                    episode_repo.set_episode_status(episode, "failed", last_error=summarize_error(exc))
+                    episode_repo.set_episode_status(episode, EpisodeStatus.FAILED, last_error=summarize_error(exc))
                     session.commit()
                     self.logger.exception("episode sync failed channel_id=%s episode_id=%s", channel.id, episode.id)
                 finally:
@@ -258,7 +176,7 @@ class SyncService:
             if sync_run is not None:
                 sync_run_repo.finish_sync_run(
                     sync_run,
-                    status="failed" if failed_count else "succeeded",
+                    status=SyncRunStatus.FAILED if failed_count else SyncRunStatus.SUCCEEDED,
                     discovered_count=discovered_count,
                     queued_count=queued_count,
                     fetched_count=fetched_count,
@@ -280,7 +198,7 @@ class SyncService:
                 if sync_run is not None:
                     sync_run_repo.finish_sync_run(
                         sync_run,
-                        status="failed",
+                        status=SyncRunStatus.FAILED,
                         discovered_count=discovered_count,
                         queued_count=queued_count,
                         fetched_count=fetched_count,
@@ -303,37 +221,7 @@ class SyncService:
             return ""
         return summarize_error(Exception("; ".join(errors)))
 
-    def _resolve_source(self, source_input: str, cookie_text: str | None = None):
-        if self._is_standard_playlist_url(source_input):
-            return self.downloader.resolve_playlist(source_input, cookie_text=cookie_text)
-        if self._has_playlist_param(source_input):
-            raise ValidationError(
-                "Detected a playlist parameter. Please use a standard playlist URL like "
-                "https://www.youtube.com/playlist?list=PL..."
-            )
-        return self.downloader.resolve_channel(source_input, cookie_text=cookie_text)
-
     def _list_source_episodes(self, source_kind: str, source_url: str, cookie_text: str | None = None):
         if source_kind == "youtube_playlist":
             return self.downloader.list_playlist_episodes(source_url, cookie_text=cookie_text)
         return self.downloader.list_channel_episodes(source_url, cookie_text=cookie_text)
-
-    def _is_standard_playlist_url(self, source_input: str) -> bool:
-        parsed = urlparse(source_input)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return False
-        if not parsed.path.rstrip("/").endswith("/playlist"):
-            return False
-        query = parse_qs(parsed.query)
-        list_ids = query.get("list") or []
-        return bool(list_ids and list_ids[0])
-
-    def _has_playlist_param(self, source_input: str) -> bool:
-        parsed = urlparse(source_input)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return False
-        if parsed.path.rstrip("/").endswith("/playlist"):
-            return False
-        query = parse_qs(parsed.query)
-        list_ids = query.get("list") or []
-        return bool(list_ids and list_ids[0])

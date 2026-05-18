@@ -3,6 +3,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.channels.service import ChannelService
 from app.common.time import utc_now
 from app.config import Settings
 from app.db.base import Base
@@ -11,7 +12,6 @@ from app.db.models.episode import Episode
 from app.db.models.sync_run import SyncRun
 from app.db.repositories import channels as channel_repo
 from app.storage.media_store import MediaStore
-from app.sync.service import SyncService
 
 
 def build_session_factory(database_path: Path) -> sessionmaker[Session]:
@@ -29,7 +29,7 @@ def test_delete_channel_removes_project_records_but_keeps_media_files(tmp_path: 
         DATABASE_PATH=str(database_path),
     )
     media_store = MediaStore(settings)
-    service = SyncService(
+    service = ChannelService(
         settings,
         media_store=media_store,
         session_factory=session_factory,
@@ -110,7 +110,7 @@ def test_delete_channel_returns_false_when_slug_is_missing(tmp_path: Path) -> No
         MEDIA_DIR=str(tmp_path / "media"),
         DATABASE_PATH=str(database_path),
     )
-    service = SyncService(
+    service = ChannelService(
         settings,
         media_store=MediaStore(settings),
         session_factory=session_factory,

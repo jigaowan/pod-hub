@@ -135,6 +135,29 @@
 
     <article class="surface section-body stack wide">
       <div class="section-heading">
+        <h2 class="section-title">字幕配置</h2>
+        <span class="muted">
+          {% if channel.transcription_enabled %}
+            已开启
+          {% else %}
+            未开启
+          {% endif %}
+        </span>
+      </div>
+      <form method="post" action="/admin/channels/{{ channel.slug }}/transcription">
+        <label class="checkbox-row" for="transcription_enabled">
+          <input id="transcription_enabled" name="transcription_enabled" type="checkbox" value="true" {% if channel.transcription_enabled %}checked{% endif %}>
+          <span>生成字幕</span>
+        </label>
+        <p class="muted">开启后，新抓取成功的节目会排队生成 VTT 字幕；字幕失败不会影响音频进入 Feed。</p>
+        <div class="actions form-actions">
+          <button class="button" type="submit">保存字幕设置</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="surface section-body stack wide">
+      <div class="section-heading">
         <h2 class="section-title">Cookie 配置</h2>
         <span class="muted">
           {% if channel.cookie_text %}
@@ -183,6 +206,7 @@
             <col class="col-status">
             <col class="col-published">
             <col class="col-feed">
+            <col class="col-transcript">
             <col class="col-error">
           </colgroup>
           <thead>
@@ -192,6 +216,7 @@
               <th>状态</th>
               <th>发布时间</th>
               <th>是否进入 Feed</th>
+              <th>字幕</th>
               <th>错误</th>
             </tr>
           </thead>
@@ -209,6 +234,15 @@
                   {% endif %}
                 </td>
                 <td data-label="是否进入 Feed">{{ "是" if episode.has_audio else "否" }}</td>
+                <td data-label="字幕">
+                  <span class="status {{ episode.transcript_status }}">{{ episode.transcript_status }}</span>
+                  {% if episode.has_transcript %}
+                    <a href="/transcripts/{{ episode.id }}.vtt">VTT</a>
+                  {% endif %}
+                  {% if episode.transcript_error %}
+                    <button class="text-button" type="button" data-dialog-title="字幕错误" data-dialog-body="{{ episode.transcript_error }}">查看错误</button>
+                  {% endif %}
+                </td>
                 <td data-label="错误">
                   {% if episode.last_error %}
                     <div class="error-summary">
@@ -222,7 +256,7 @@
               </tr>
             {% else %}
               <tr>
-                <td data-label="" colspan="6" class="muted">首次同步完成后，这里会展示该频道的节目列表。</td>
+                <td data-label="" colspan="7" class="muted">首次同步完成后，这里会展示该频道的节目列表。</td>
               </tr>
             {% endfor %}
           </tbody>

@@ -183,12 +183,13 @@ def test_register_channel_failure_does_not_notify(tmp_path: Path) -> None:
     session_factory = build_session_factory(database_path)
     settings = build_settings(tmp_path, database_path)
     notifier = RecordingNotifier()
-    service = SyncService(
+    from app.channels.service import ChannelService
+
+    service = ChannelService(
         settings,
         downloader=ResolvingFailureDownloader(),
         media_store=MediaStore(settings),
         session_factory=session_factory,
-        notifier=notifier,
     )
 
     with pytest.raises(DownloaderError):

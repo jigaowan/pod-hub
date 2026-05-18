@@ -21,6 +21,11 @@
     <form method="post" action="/admin/channels">
       <label for="source_input">来源标识</label>
       <input id="source_input" name="source_input" type="text" value="{{ source_input }}" placeholder="https://www.youtube.com/playlist?list=PL...">
+      <label class="checkbox-row" for="transcription_enabled">
+        <input id="transcription_enabled" name="transcription_enabled" type="checkbox" value="true" {% if transcription_enabled %}checked{% endif %}>
+        <span>生成字幕</span>
+      </label>
+      <p class="muted">开启后，音频抓取完成会通过 Cloudflare Whisper 异步生成 VTT 字幕。</p>
       <label for="cookie_text">cookies.txt（可选）</label>
       <textarea id="cookie_text" name="cookie_text" placeholder="# Netscape HTTP Cookie File"></textarea>
       <p class="muted">

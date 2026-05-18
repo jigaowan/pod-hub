@@ -5,13 +5,14 @@ from sqlalchemy.orm import Session
 
 from app.common.time import utc_now
 from app.db.models.sync_run import SyncRun
+from app.domain.status import SyncRunStatus
 
 
 def create_sync_run(session: Session, channel_id: int) -> SyncRun:
     now = utc_now()
     sync_run = SyncRun(
         channel_id=channel_id,
-        status="running",
+        status=SyncRunStatus.RUNNING,
         started_at=now,
         created_at=now,
         discovered_count=0,
@@ -47,7 +48,7 @@ def create_skipped_sync_run(session: Session, channel_id: int, reason: str) -> S
     now = utc_now()
     sync_run = SyncRun(
         channel_id=channel_id,
-        status="skipped",
+        status=SyncRunStatus.SKIPPED,
         started_at=now,
         finished_at=now,
         created_at=now,
@@ -70,4 +71,3 @@ def get_latest_sync_run(session: Session, channel_id: int) -> SyncRun | None:
         .limit(1)
     )
     return session.scalar(stmt)
-

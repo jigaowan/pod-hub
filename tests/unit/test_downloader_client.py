@@ -85,7 +85,7 @@ def test_run_command_does_not_auto_add_js_runtimes(monkeypatch, tmp_path: Path) 
         captured_command.extend(command)
         return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
 
-    monkeypatch.setattr("app.downloader.client.subprocess.run", fake_run)
+    monkeypatch.setattr("app.downloader.runner.subprocess.run", fake_run)
 
     client._run_command("test", ["--dump-single-json", "https://example.com"], timeout=1)
 
@@ -106,7 +106,7 @@ def test_run_command_uses_explicit_js_runtimes(monkeypatch, tmp_path: Path) -> N
         captured_command.extend(command)
         return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
 
-    monkeypatch.setattr("app.downloader.client.subprocess.run", fake_run)
+    monkeypatch.setattr("app.downloader.runner.subprocess.run", fake_run)
 
     client._run_command("test", ["--dump-single-json", "https://example.com"], timeout=1)
 
@@ -127,7 +127,7 @@ def test_run_command_writes_cookie_text_to_temporary_file(monkeypatch, tmp_path:
         assert captured_cookie_path.read_text() == cookie_text
         return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
 
-    monkeypatch.setattr("app.downloader.client.subprocess.run", fake_run)
+    monkeypatch.setattr("app.downloader.runner.subprocess.run", fake_run)
 
     client._run_command(
         "test",

@@ -42,3 +42,22 @@ def test_publish_audio_falls_back_on_cross_device_rename(tmp_path: Path, monkeyp
     assert final_path.exists()
     assert final_path.read_bytes() == b"demo-audio"
     assert not temp_file_path.exists()
+
+
+def test_publish_transcript_stores_vtt_by_source_video_id(tmp_path: Path) -> None:
+    settings = Settings(
+        BASE_URL="https://podhub.example.com",
+        MEDIA_DIR=str(tmp_path / "media"),
+        TMP_MEDIA_DIR=str(tmp_path / "tmp-media"),
+        DATABASE_PATH=str(tmp_path / "podhub.db"),
+    )
+    store = MediaStore(settings)
+
+    final_path = store.publish_transcript(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n",
+        "demo-channel",
+        "video-123",
+    )
+
+    assert final_path == tmp_path / "media" / "demo-channel" / "video-123.vtt"
+    assert final_path.read_text() == "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n"

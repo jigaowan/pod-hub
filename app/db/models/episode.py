@@ -7,6 +7,7 @@ from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text,
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.domain.status import TranscriptStatus
 
 if TYPE_CHECKING:
     from app.db.models.channel import Channel
@@ -37,6 +38,12 @@ class Episode(Base):
     audio_mime_type: Mapped[str | None] = mapped_column(String(64))
     audio_bytes: Mapped[int | None] = mapped_column(Integer)
     audio_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transcript_status: Mapped[str] = mapped_column(String(64), nullable=False, default=TranscriptStatus.NONE)
+    transcript_path: Mapped[str | None] = mapped_column(Text)
+    transcript_mime_type: Mapped[str | None] = mapped_column(String(64))
+    transcript_bytes: Mapped[int | None] = mapped_column(Integer)
+    transcript_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transcript_error: Mapped[str | None] = mapped_column(Text)
     listed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)

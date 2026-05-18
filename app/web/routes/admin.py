@@ -56,7 +56,12 @@ def new_channel_form(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         name="channels_new.html",
         request=request,
-        context={"error": None, "source_input": "", "next_sync_at": get_next_sync_at(request)},
+        context={
+            "error": None,
+            "source_input": "",
+            "transcription_enabled": False,
+            "next_sync_at": get_next_sync_at(request),
+        },
     )
 
 
@@ -65,10 +70,15 @@ def create_channel(
     request: Request,
     source_input: str = Form(...),
     cookie_text: str | None = Form(default=None),
+    transcription_enabled: bool = Form(default=False),
 ) -> HTMLResponse:
-    sync_service = request.app.state.sync_service
+    channel_service = request.app.state.channel_service
     try:
-        channel = sync_service.register_channel(source_input, cookie_text=cookie_text)
+        channel = channel_service.register_channel(
+            source_input,
+            cookie_text=cookie_text,
+            transcription_enabled=transcription_enabled,
+        )
         return RedirectResponse(
             url=f"/admin/channels/{channel.slug}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -80,6 +90,7 @@ def create_channel(
             context={
                 "error": str(exc),
                 "source_input": source_input,
+                "transcription_enabled": transcription_enabled,
                 "next_sync_at": get_next_sync_at(request),
             },
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -131,7 +142,7 @@ def update_channel_cookie(
     cookie_text: str | None = Form(default=None),
 ) -> HTMLResponse:
     try:
-        updated = request.app.state.sync_service.update_channel_cookie(channel_slug, cookie_text)
+        updated = request.app.state.channel_service.update_channel_cookie(channel_slug, cookie_text)
     except PodHubError as exc:
         return render_channel_detail(
             request,
@@ -148,8 +159,21 @@ def update_channel_cookie(
 
 @router.post("/admin/channels/{channel_slug}/cookie/delete")
 def delete_channel_cookie(request: Request, channel_slug: str) -> HTMLResponse:
-    deleted = request.app.state.sync_service.delete_channel_cookie(channel_slug)
+    deleted = request.app.state.channel_service.delete_channel_cookie(channel_slug)
     if not deleted:
+        return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    return RedirectResponse(url=f"/admin/channels/{channel_slug}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/channels/{channel_slug}/transcription")
+def update_channel_transcription(
+    request: Request,
+    channel_slug: str,
+    transcription_enabled: bool = Form(default=False),
+) -> HTMLResponse:
+    updated = request.app.state.channel_service.update_channel_transcription(channel_slug, transcription_enabled)
+    if not updated:
         return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
 
     return RedirectResponse(url=f"/admin/channels/{channel_slug}", status_code=status.HTTP_303_SEE_OTHER)
@@ -157,7 +181,7 @@ def delete_channel_cookie(request: Request, channel_slug: str) -> HTMLResponse:
 
 @router.post("/admin/channels/{channel_slug}/delete")
 def delete_channel(request: Request, channel_slug: str) -> HTMLResponse:
-    deleted = request.app.state.sync_service.delete_channel(channel_slug)
+    deleted = request.app.state.channel_service.delete_channel(channel_slug)
     if not deleted:
         return HTMLResponse("Channel not found", status_code=status.HTTP_404_NOT_FOUND)
 

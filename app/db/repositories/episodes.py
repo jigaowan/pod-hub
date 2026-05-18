@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.common.time import utc_now
 from app.db.models.episode import Episode
+from app.domain.status import EpisodeStatus
 from app.downloader.schemas import DiscoveredEpisode, FetchedAudio
 
 
@@ -26,7 +27,7 @@ def get_episode(session: Session, episode_id: int) -> Episode | None:
 def list_feed_ready_episodes(session: Session, channel_id: int, source_kind: str) -> list[Episode]:
     stmt = (
         select(Episode)
-        .where(Episode.channel_id == channel_id, Episode.status == "audio_ready")
+        .where(Episode.channel_id == channel_id, Episode.status == EpisodeStatus.AUDIO_READY)
     )
     if source_kind == "youtube_playlist":
         stmt = stmt.order_by(
@@ -77,7 +78,7 @@ def upsert_discovered_episodes(
                 duration_seconds=entry.duration_seconds,
                 thumbnail_url=entry.thumbnail_url,
                 listed_at=now,
-                status="discovered",
+                status=EpisodeStatus.DISCOVERED,
                 created_at=now,
                 updated_at=now,
             )
@@ -104,7 +105,7 @@ def list_recent_unfetched_episodes(session: Session, channel_id: int, limit: int
         select(Episode)
         .where(
             Episode.channel_id == channel_id,
-            Episode.status.in_(("discovered", "failed")),
+            Episode.status.in_((EpisodeStatus.DISCOVERED, EpisodeStatus.FAILED)),
             Episode.audio_path.is_(None),
         )
         .order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
@@ -123,7 +124,7 @@ def list_new_unfetched_episodes(session: Session, episode_ids: Iterable[int], li
         select(Episode)
         .where(
             Episode.id.in_(ids),
-            Episode.status.in_(("discovered", "failed")),
+            Episode.status.in_((EpisodeStatus.DISCOVERED, EpisodeStatus.FAILED)),
             Episode.audio_path.is_(None),
         )
         .order_by(order_case)
@@ -145,7 +146,7 @@ def list_backlog_unfetched_episodes(
         select(Episode)
         .where(
             Episode.channel_id == channel_id,
-            Episode.status.in_(("discovered", "failed")),
+            Episode.status.in_((EpisodeStatus.DISCOVERED, EpisodeStatus.FAILED)),
             Episode.audio_path.is_(None),
         )
         .order_by(Episode.published_at.asc().nullsfirst(), Episode.listed_at.asc(), Episode.id.asc())
@@ -179,6 +180,6 @@ def mark_audio_ready(
     episode.audio_mime_type = fetched_audio.audio_mime_type
     episode.audio_bytes = fetched_audio.audio_bytes
     episode.audio_fetched_at = now
-    episode.status = "audio_ready"
+    episode.status = EpisodeStatus.AUDIO_READY
     episode.last_error = None
     episode.updated_at = now

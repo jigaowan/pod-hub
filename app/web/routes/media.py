@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, Response
 from app.common.media import AUDIO_FILE_EXTENSION, AUDIO_MIME_TYPE, episode_media_filename
 from app.db.repositories import episodes as episode_repo
 from app.db.session import get_session_factory
+from app.domain.status import EpisodeStatus
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ def media_file(request: Request, episode_id: int) -> Response:
     session = session_factory()
     try:
         episode = episode_repo.get_episode(session, episode_id)
-        if episode is None or episode.status != "audio_ready" or not episode.audio_path:
+        if episode is None or episode.status != EpisodeStatus.AUDIO_READY or not episode.audio_path:
             return Response(status_code=status.HTTP_404_NOT_FOUND)
 
         file_path = Path(episode.audio_path)
