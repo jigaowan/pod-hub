@@ -91,15 +91,19 @@ def list_entries(
 ) -> None:
     policy = policy_for(source)
     seen = set()
-    ordered = entries
     initial = source["last_ok_at"] is None
+    latest_known = None
+    if backfill is not None and not initial:
+        # Compare new uploads against the source history before this scan changes it.
+        latest_known = conn.execute(
+            """SELECT max(v.published_at) FROM source_entries e JOIN videos v USING(video_id)
+               WHERE e.source_id=?""", (source["id"],),
+        ).fetchone()[0]
+    dated = [(parse_date(item.get("timestamp")) or parse_date(item.get("upload_date")), item) for item in entries]
     if initial or backfill is not None:
-        ordered = sorted(
-            entries, key=lambda item: parse_date(item.get("timestamp")) or parse_date(item.get("upload_date")) or "",
-            reverse=backfill is None,
-        )
-    budget = backfill if backfill is not None else policy.initial_backfill_count if initial else None
-    for item in ordered:
+        dated.sort(key=lambda entry: entry[0] or "", reverse=backfill is None)
+    budget = backfill if backfill is not None else policy.initial_backfill_count
+    for published, item in dated:
         vid = item.get("id")
         if not isinstance(vid, str) or not VIDEO_ID.fullmatch(vid) or vid in seen:
             continue
@@ -116,13 +120,15 @@ def list_entries(
                 )
             continue
         reason = policy.rejection(item)
+        historical = backfill is not None and not (latest_known and published and published > latest_known)
+        limited = initial or historical
         if reason:
             state = "filtered"
-        elif budget is not None and budget <= 0:
+        elif limited and budget <= 0:
             state = "candidate"
         else:
             state = "wanted"
-            if budget is not None:
+            if limited:
                 budget -= 1
         conn.execute(
             """INSERT INTO source_entries(source_id,video_id,state,filter_reason,evaluated_rev,sort_key,discovered_at)
@@ -130,7 +136,7 @@ def list_entries(
             (source["id"], vid, state, reason, source["policy_rev"], item.get("sort_key"), stamp()),
         )
         if state == "wanted":
-            activate_video(conn, config, vid, 10 if initial or backfill is not None else 50)
+            activate_video(conn, config, vid, 10 if limited else 50)
 
 
 class Discovery:
@@ -223,7 +229,8 @@ class Discovery:
         atom = None
         atom_kind = None
         deep = False
-        force_deep = ''
+        force_deep = ""
+        backfill = None
         cookie_id = source["cookie_profile_id"]
         try:
             with self.db.connect() as conn:
@@ -231,7 +238,10 @@ class Discovery:
                 known = {row[0] for row in conn.execute("SELECT video_id FROM source_entries WHERE source_id=?", (source["id"],))}
                 last_deep = get_meta(conn, f"last_deep:{source['id']}")
                 force_deep = get_meta(conn, f"force_deep:{source['id']}")
-            quick = source["kind"] == "channel" and not cookie and source["last_ok_at"] and not force_deep
+                pending_backfill = int(force_deep or "0")
+                if pending_backfill > 0:
+                    backfill = pending_backfill
+            quick = source["kind"] == "channel" and not cookie and source["last_ok_at"] and backfill is None
             rss_fallback = False
             weekly = bool(last_deep and last_deep <= stamp(seconds=-7 * 86400))
             if quick and not weekly:
@@ -247,7 +257,7 @@ class Discovery:
                         run.warnings.append("YouTube Atom failed; using a bounded flat listing")
                         log.warning("Atom fallback for source %s", source["id"])
             if atom is None and not run.error:
-                early = bool(source["last_ok_at"] and not weekly and not force_deep and (
+                early = bool(source["last_ok_at"] and not weekly and backfill is None and (
                     source["kind"] == "channel" or policy.playlist_scan_mode == "head_early_stop"
                 ))
                 consecutive = 0
@@ -291,7 +301,7 @@ class Discovery:
                          failure.reason if failure else None, stamp(now), current["id"]),
                     )
                 else:
-                    list_entries(conn, self.config, current, entries, backfill=int(force_deep) if force_deep else None)
+                    list_entries(conn, self.config, current, entries, backfill=backfill)
                     conn.execute(
                         """UPDATE sources SET last_checked_at=?,last_ok_at=?,next_check_at=?,consecutive_failures=0,
                            last_error_category=NULL,last_error_message=NULL,http_etag=?,http_last_modified=?,updated_at=? WHERE id=?""",
@@ -303,6 +313,7 @@ class Discovery:
                         set_meta(conn, f"atom_variant:{source['id']}", atom_kind)
                     if deep:
                         set_meta(conn, f"last_deep:{source['id']}", stamp(now))
+                    if force_deep and (backfill is None or deep):
                         conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
             _, events = finish_attempt(conn, self.breakers, attempt, run, "error" if run.error else "ok",
                                        failure if run.error else None, cookie_id)

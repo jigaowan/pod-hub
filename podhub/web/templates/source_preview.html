@@ -16,6 +16,7 @@
   {% endif %}
   <form method="post" action="/admin/sources" class="control-row">
     <input type="hidden" name="ticket" value="{{ ticket }}">
+    <label>Folder slug <input name="slug" value="{{ suggested_slug }}" maxlength="255" pattern="[a-z0-9]+(?:-[a-z0-9]+)*"></label>
     <label>Initial backfill <input type="number" name="initial_backfill_count" min="0" required value="{{ policy.initial_backfill_count }}"></label>
     <button>Confirm &amp; Add</button>
   </form>

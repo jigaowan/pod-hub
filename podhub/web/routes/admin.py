@@ -205,6 +205,7 @@ async def preview_source(request: Request) -> Response:
     entries = [(item, policy.rejection(item)) for item in preview.entries]
     context = {"preview": preview, "ticket": ticket, "entries": entries, "policy": policy,
                "preview_cover": youtube_cover(preview.identity.cover_url),
+               "suggested_slug": s.suggest_slug(preview.identity, value),
                "value": value, "selected": selected, "profile": profile}
     if request.headers.get("hx-request") == "true":
         return render(request, "source_preview.html", **context)
@@ -219,7 +220,8 @@ async def confirm_source(request: Request) -> Response:
         changes = payload["policy"]
         changes["initial_backfill_count"] = number(form, "initial_backfill_count")
         sid = await s.add_source(SourceIdentity(**payload["identity"]), payload["original"],
-                                 SourcePolicy.model_validate(changes), payload["cookie"])
+                                 SourcePolicy.model_validate(changes), payload["cookie"],
+                                 slug=text(form, "slug") or None)
     return redirect(f"/admin/sources/{sid}")
 
 

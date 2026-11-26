@@ -3,11 +3,12 @@ from __future__ import annotations
 import httpx
 
 from podhub.core.discovery import list_entries, normalize_source
+from podhub.db.connection import get_meta, set_meta
 from podhub.db.repositories import start_attempt
 from podhub.domain.enums import SourceKind
 from podhub.domain.models import SourceIdentity, stamp
 from podhub.domain.policy import SourcePolicy
-from podhub.ytdlp.rss import fetch_atom
+from podhub.ytdlp.rss import AtomResult, fetch_atom
 
 from conftest import CHANNEL, OTHER, THIRD, VIDEO
 
@@ -68,8 +69,11 @@ async def test_discovery_filters_onboarding_tail_scan_and_backfill(services):
     services.update_source(sid, SourcePolicy(min_duration_s=0), None, 1200)
     with services.db.connect() as conn:
         assert conn.execute("SELECT state,evaluated_rev FROM source_entries WHERE video_id=?", (THIRD,)).fetchone()[:] == ("candidate", 2)
+    next_check = services.source(sid)["next_check_at"]
     services.source_command(sid, "backfill", count=1)
+    assert services.source(sid)["next_check_at"] == next_check
     with services.db.connect() as conn:
+        assert get_meta(conn, f"force_deep:{sid}") == ""
         assert conn.execute("SELECT state FROM source_entries WHERE video_id=?", (THIRD,)).fetchone()[0] == "wanted"
         assert conn.execute("SELECT state FROM source_entries WHERE video_id=?", (OTHER,)).fetchone()[0] == "candidate"
 
@@ -111,3 +115,60 @@ async def test_channel_atom_failure_uses_bounded_listing_and_keeps_exact_date(se
     with services.db.connect() as conn:
         assert conn.execute("SELECT published_at FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "2026-02-03T04:05:06.000000+00:00"
         assert conn.execute("SELECT warnings_json FROM attempts WHERE id=?", (attempt,)).fetchone()[0]
+
+
+async def test_zero_backfill_uses_normal_atom_discovery(services, monkeypatch):
+    url = f"https://www.youtube.com/channel/{CHANNEL}"
+    sid = await services.add_source(SourceIdentity("channel", CHANNEL, "Channel", url), url, SourcePolicy())
+
+    async def atom(source, policy):
+        return AtomResult([{"id": OTHER, "timestamp": "2026-02-04"}], None, None), "channel"
+
+    monkeypatch.setattr(services.discovery, "atom", atom)
+    with services.db.transaction() as conn:
+        conn.execute("UPDATE sources SET last_ok_at=? WHERE id=?", (stamp(), sid))
+        set_meta(conn, f"force_deep:{sid}", "0")
+        attempt = start_attempt(conn, "discovery", sid)
+    await services.discovery.sync(services.source(sid), attempt)
+    assert not services.runner.calls
+    with services.db.connect() as conn:
+        assert conn.execute(
+            "SELECT e.state,v.priority FROM source_entries e JOIN videos v USING(video_id) WHERE v.video_id=?",
+            (OTHER,),
+        ).fetchone()[:] == ("wanted", 50)
+        assert get_meta(conn, f"force_deep:{sid}") == ""
+
+
+async def test_deep_backfill_reserves_budget_for_oldest_history(services):
+    url = f"https://www.youtube.com/channel/{CHANNEL}"
+    sid = await services.add_source(SourceIdentity("channel", CHANNEL, "Channel", url), url, SourcePolicy(initial_backfill_count=1))
+    with services.db.transaction() as conn:
+        list_entries(conn, services.config, services.source(sid), [
+            {"id": VIDEO, "timestamp": "2026-02-03"},
+            {"id": OTHER, "timestamp": "2026-02-02"},
+        ])
+        conn.execute("UPDATE sources SET last_ok_at=?,next_check_at=? WHERE id=?", (stamp(), stamp(seconds=3600), sid))
+        attempt = start_attempt(conn, "discovery", sid)
+
+    services.source_command(sid, "backfill", count=2)
+    assert services.source(sid)["next_check_at"] <= stamp()
+    with services.db.connect() as conn:
+        assert get_meta(conn, f"force_deep:{sid}") == "1"
+    services.runner.entries = [
+        {"id": "newvideo001", "timestamp": "2026-02-05"},
+        {"id": "newvideo002", "upload_date": "20260204"},
+        {"id": VIDEO, "timestamp": "2026-02-03"},
+        {"id": "oldvideo001", "timestamp": "2026-02-01"},
+        {"id": "oldvideo002", "timestamp": "2026-01-01"},
+    ]
+    await services.discovery.sync(services.source(sid), attempt)
+    assert [mode for mode, _ in services.runner.calls] == ["list"]
+    with services.db.connect() as conn:
+        states = {row[0]: row[1:] for row in conn.execute(
+            "SELECT e.video_id,e.state,v.priority FROM source_entries e JOIN videos v USING(video_id) WHERE e.source_id=?",
+            (sid,),
+        )}
+        assert states["newvideo001"] == states["newvideo002"] == ("wanted", 50)
+        assert states[OTHER] == states["oldvideo002"] == ("wanted", 10)
+        assert states["oldvideo001"][0] == "candidate"
+        assert get_meta(conn, f"force_deep:{sid}") == ""

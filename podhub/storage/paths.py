@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -39,7 +39,24 @@ def parse_video(value: str) -> str:
 
 def slugify(title: str) -> str:
     normalized = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", "-", normalized)[:80].strip("-") or "source"
+    return re.sub(r"[^a-z0-9]+", "-", normalized)[:80].strip("-")
+
+
+def default_source_slug(title: str, original: str, external_id: str) -> str:
+    if slug := slugify(title):
+        return slug
+    original = original.strip()
+    if original.startswith("@"):
+        handle = original
+    else:
+        try:
+            url = urlsplit(original if "://" in original else f"https://{original}")
+            handle = unquote(url.path.strip("/").split("/", 1)[0]) if url.hostname in YOUTUBE_HOSTS else ""
+        except ValueError:
+            handle = ""
+    if handle.startswith("@") and (slug := slugify(handle[1:])):
+        return slug
+    return slugify(external_id)
 
 
 def safe_path(root: Path, relative: str) -> Path:

@@ -31,7 +31,7 @@ from podhub.postprocess.registry import PostProcessorRegistry
 from podhub.postprocess.worker import PostprocessWorker
 from podhub.storage.cookies import copy_cookie, expiry, save_cookie
 from podhub.storage.media import save_cover
-from podhub.storage.paths import canonical_video, parse_video, safe_path, slugify, source_dir, youtube_cover
+from podhub.storage.paths import SLUG, canonical_video, default_source_slug, parse_video, safe_path, source_dir, youtube_cover
 from podhub.ytdlp.runner import RunResult, Runner, redact, stop_group
 from podhub.ytdlp.shim import version_parts
 
@@ -103,11 +103,30 @@ class Services:
             return Preview(SourceIdentity(kind, f"manual:{uuid4()}", value.strip(), ""), [])
         return await self.discovery.preview(value, kind, cookie_id)
 
+    def _available_slug(self, conn: sqlite3.Connection, base: str, *, explicit: bool = False) -> str:
+        if len(base) > 255 or not SLUG.fullmatch(base):
+            raise ValueError("folder slug must be at most 255 characters using lowercase letters, numbers and single hyphens")
+        slug = base
+        suffix = 2
+        while True:
+            path = self.config.paths.output_dir / slug
+            if not conn.execute("SELECT 1 FROM sources WHERE slug=?", (slug,)).fetchone() and not (
+                path.exists() or path.is_symlink()
+            ):
+                return slug
+            if explicit:
+                raise ValueError("folder slug is already in use")
+            slug = f"{base}-{suffix}"
+            suffix += 1
+
+    def suggest_slug(self, identity: SourceIdentity, original: str) -> str:
+        with self.db.connect() as conn:
+            return self._available_slug(conn, default_source_slug(identity.title, original, identity.external_id))
+
     async def add_source(
         self, identity: SourceIdentity, original: str, policy: SourcePolicy,
-        cookie_id: int | None = None, check_interval_s: int | None = None,
+        cookie_id: int | None = None, check_interval_s: int | None = None, *, slug: str | None = None,
     ) -> int:
-        root = self.config.paths.output_dir
         interval = check_interval_s or (
             self.config.pacing.playlist_check_interval_s if identity.kind == "playlist"
             else self.config.pacing.default_check_interval_s
@@ -117,13 +136,10 @@ class Services:
         with self.db.transaction() as conn:
             if cookie_id is not None and not cookie_for(conn, cookie_id):
                 raise ValueError("cookie profile does not exist")
-            slug = base = slugify(identity.title)
-            suffix = 2
             if conn.execute("SELECT 1 FROM sources WHERE external_id=?", (identity.external_id,)).fetchone():
                 raise ValueError("source already exists")
-            while conn.execute("SELECT 1 FROM sources WHERE slug=?", (slug,)).fetchone() or (root / slug).exists() or (root / slug).is_symlink():
-                slug = f"{base}-{suffix}"
-                suffix += 1
+            base = default_source_slug(identity.title, original, identity.external_id) if slug is None else slug
+            slug = self._available_slug(conn, base, explicit=slug is not None)
             now = stamp()
             cursor = conn.execute(
                 """INSERT INTO sources(kind,source_input,external_id,url,title,slug,feed_token,policy_json,
@@ -177,7 +193,8 @@ class Services:
         if check_interval < 1:
             raise ValueError("check interval must be positive")
         with self.db.transaction() as conn:
-            if cookie_id is not None and not cookie_for(conn, cookie_id):
+            cookie = cookie_for(conn, cookie_id)
+            if cookie_id is not None and cookie is None:
                 raise ValueError("cookie profile does not exist")
             source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
             if not source:
@@ -189,6 +206,10 @@ class Services:
                    check_interval_s=?,updated_at=? WHERE id=?""",
                 (policy.model_dump_json(), rev, cookie_id, check_interval, stamp(), source_id),
             )
+            if cookie and cookie["id"] != source["cookie_profile_id"] and cookie["status"] == "active" and (
+                self.breakers.allowed(conn, (f"cookie:{cookie_id}",))
+            ):
+                self._reactivate_auth_videos(conn, cookie["id"], source_id=source_id)
             if not revised:
                 return
             for row in conn.execute(
@@ -222,8 +243,9 @@ class Services:
                 ).fetchall()
                 for row in rows:
                     self.want(conn, source_id, row["video_id"], 10)
-                if source["kind"] != "manual":
-                    set_meta(conn, f"force_deep:{source_id}", str(count - len(rows)))
+                remaining = count - len(rows)
+                if remaining > 0 and source["kind"] != "manual":
+                    set_meta(conn, f"force_deep:{source_id}", str(remaining))
                     conn.execute("UPDATE sources SET next_check_at=? WHERE id=?", (stamp(), source_id))
             else:
                 raise ValueError("invalid source action")
@@ -379,6 +401,17 @@ class Services:
             conn.execute("DELETE FROM cookie_profiles WHERE id=?", (cookie_id,))
             conn.execute("DELETE FROM circuit_breakers WHERE key=?", (f"cookie:{cookie_id}",))
 
+    def _reactivate_auth_videos(self, conn: sqlite3.Connection, cookie_id: int, *, source_id: int | None = None) -> None:
+        rows = conn.execute(
+            """SELECT DISTINCT v.video_id FROM videos v JOIN source_entries e USING(video_id)
+               JOIN sources s ON s.id=e.source_id
+               WHERE s.cookie_profile_id=? AND (? IS NULL OR s.id=?)
+                 AND e.state='wanted' AND v.state='unavailable' AND v.last_category='auth_required'""",
+            (cookie_id, source_id, source_id),
+        ).fetchall()
+        for row in rows:
+            activate_video(conn, self.config, row["video_id"], 50, retry=True)
+
     async def validate_cookie(self, cookie_id: int, value: str = "") -> bool:
         vid = parse_video(value) if value.strip() else DEFAULT_COOKIE_TEST_VIDEO
         with self.db.transaction() as conn:
@@ -418,6 +451,7 @@ class Services:
                 if event := self.breakers.reset(conn, f"cookie:{cookie_id}"):
                     events.append(event)
                 conn.execute("UPDATE sources SET next_check_at=? WHERE cookie_profile_id=?", (stamp(), cookie_id))
+                self._reactivate_auth_videos(conn, cookie_id)
             else:
                 conn.execute(
                     """UPDATE cookie_profiles SET status=CASE WHEN status='expired' THEN status ELSE 'suspect' END,

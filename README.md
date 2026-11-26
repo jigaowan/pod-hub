@@ -25,13 +25,16 @@ The default listener is `127.0.0.1:8000`. Use a reverse proxy or Tailscale to re
 
 The NixOS module creates the default service account, provisions both directories, and runs the service with systemd hardening. It takes the Python interpreter from `ytdlpPackage` and constructs an environment in which the standalone shim can import that exact yt-dlp version. Set `ytdlpPackage` to a newer nixpkgs package when needed. Override `ffmpegPackage` and `jsRuntimePackage` to select those tools, or set `jsRuntimePackage = null` to disable the runtime. Explicit `settings.toolchain` or environment overrides take precedence over tool defaults.
 
+Write `stateDir`, `outputDir`, and `environmentFile` as quoted absolute path strings. systemd reads the optional environment file at runtime.
+
 ## Local development
 
 ```sh
 nix develop
 python -m podhub.cli --help
 python -m pytest
-nix flake check
+nix flake check --all-systems
+nix eval --impure --file tests/nixos-module.nix
 ```
 
 The development shell runs directly from the checkout. To install the `pod-hub` command in editable mode, create a writable virtual environment with `python -m venv --system-site-packages .venv` and run `.venv/bin/python -m pip install --no-build-isolation --no-deps -e .`. Set separate writable directories for local use.
@@ -54,7 +57,7 @@ pod-hub doctor
 pod-hub pause
 pod-hub resume
 pod-hub sources list
-pod-hub sources add @channel --initial-backfill-count 3
+pod-hub sources add @channel --initial-backfill-count 3 --slug my-channel
 pod-hub sources add "Listen Later" --kind manual
 pod-hub sources sync 1
 pod-hub sources add-video 2 'https://www.youtube.com/watch?v=VIDEO_ID'
@@ -72,8 +75,8 @@ The CLI and admin panel share the same SQLite database and service operations. R
 
 Channel discovery normally uses conditional YouTube Atom requests. Initial, playlist, cookie-backed and reconciliation scans use bounded lazy listings. Discovery populates a durable SQLite WAL queue. Download workers claim it atomically and apply pacing, retry budgets, deadlines, and circuit breakers. yt-dlp runs in a dedicated process group and streams JSONL events to a watchdog. FFmpeg produces faststart M4A and ffprobe validates it before publishing.
 
-The hard retry deadline takes precedence over category backoffs. Increase `retry.give_up_after_days` if you want the 30-day recheck for temporarily unavailable videos.
+Temporarily unavailable videos follow `retry.soft_unavailable_recheck_days`. The default delays are 1, 7, and 30 days, after which the video stays unavailable if the last recheck also fails.
 
-Each source folder contains stable video-ID filenames and content-hashed artwork. The service hardlinks shared audio across source folders when possible. Retiring episodes leave the feed first and remain downloadable through the grace period. Daily maintenance reports unregistered files and retains seven SQLite backups in the private state directory. The published folders and the private cookie files should be backed up separately if needed. The V2 database starts fresh. Keep V1 data separately if you still need access to it.
+Each source folder contains stable video-ID filenames and content-hashed artwork. Set its name in the source preview or pass `--slug` on the CLI. The default comes from the title, the channel handle, or the source ID, in that order. The service hardlinks shared audio across source folders when possible. Retiring episodes leave the feed first and remain downloadable through the grace period. Daily maintenance reports unregistered files and retains seven SQLite backups in the private state directory. The published folders and the private cookie files should be backed up separately if needed.
 
 The post-processing registry starts empty. To extend an embedded instance, register a `PostProcessor` and pass its registry to `Services`. The worker passes a private staging directory as `PostProcessContext.artifacts_dir`. A processor returns file names relative to the final output directory, such as `my-source/artifacts/VIDEO_ID.vtt`, and the worker atomically publishes the staged files. RSS includes public `transcript_vtt` artifacts automatically.

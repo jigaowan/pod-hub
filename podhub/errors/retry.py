@@ -50,17 +50,18 @@ def plan_retry(
             schedule = {
                 Category.TRANSIENT_NETWORK: retry.transient_backoff_s,
                 Category.DOWNLOAD_403: retry.download_403_backoff_s,
-                Category.CORRUPTED_ARTIFACT: [600, 600],
+                Category.CORRUPTED_ARTIFACT: [600],
             }.get(category, retry.unclassified_backoff_s)
-            if count >= len(schedule):
+            if count > len(schedule):
                 state = VideoState.FAILED
             else:
                 delay = schedule[count - 1] * random.uniform(0.8, 1.2)
     due = stamp(now, seconds=delay) if delay is not None else None
     deadline = video["give_up_at"]
-    if deadline and stamp(now) >= deadline:
-        state = VideoState.UNAVAILABLE if category == Category.NOT_READY else VideoState.FAILED
-        due = None
-    elif due and deadline and due > deadline and category != Category.SOFT_UNAVAILABLE:
-        due = deadline
+    if deadline and category != Category.SOFT_UNAVAILABLE:
+        if stamp(now) >= deadline:
+            state = VideoState.UNAVAILABLE if category == Category.NOT_READY else VideoState.FAILED
+            due = None
+        elif due and due > deadline:
+            due = deadline
     return RetryDecision(state, due, counts, category == Category.UNCLASSIFIED, charged)

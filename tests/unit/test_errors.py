@@ -43,7 +43,7 @@ async def test_unknown_retries_and_deadline(services, source_factory):
         error = classify(RunResult(error={"msg": "Unknown"}))
         decision = plan_retry(services.config.retry, video, error)
         assert decision.state == "pending" and decision.unclassified and decision.next_attempt_at
-        conn.execute("UPDATE videos SET category_attempts_json=? WHERE video_id=?", ('{"unclassified":2}', VIDEO))
+        conn.execute("UPDATE videos SET category_attempts_json=? WHERE video_id=?", ('{"unclassified":3}', VIDEO))
         video = conn.execute("SELECT * FROM videos").fetchone()
         outcome = plan_retry(services.config.retry, video, error)
         assert outcome.state == "failed" and outcome.unclassified and outcome.next_attempt_at is None
@@ -51,6 +51,55 @@ async def test_unknown_retries_and_deadline(services, source_factory):
         assert result.state == "failed"
         assert claim_video(conn, stamp(seconds=15 * 86400)) is None
         assert conn.execute("SELECT state FROM videos").fetchone()[0] == "failed"
+
+
+@pytest.mark.parametrize("run, schedule", [
+    (RunResult(error={"http_status": 503}), [120, 600, 1800, 7200, 21600]),
+    (RunResult(error={"http_status": 403}, phase="download"), [120, 900, 3600]),
+    (RunResult(error={"msg": "unexpected failure"}), [600, 3600, 21600]),
+    (RunResult(error={"exc_class": "CorruptedArtifact"}), [600]),
+])
+async def test_retry_uses_every_configured_delay(services, source_factory, monkeypatch, run, schedule):
+    monkeypatch.setattr("podhub.errors.retry.random.uniform", lambda *_: 1.0)
+    sid = await source_factory()
+    services.add_video(sid, VIDEO)
+    failure = classify(run)
+    now = utc_now()
+    with services.db.transaction() as conn:
+        for failures, delay in enumerate([*schedule, None]):
+            conn.execute("UPDATE videos SET category_attempts_json=?", (json.dumps({failure.category: failures}),))
+            video = conn.execute("SELECT * FROM videos").fetchone()
+            result = plan_retry(services.config.retry, video, failure, now=now)
+            assert result.category_attempts[failure.category] == failures + 1
+            assert result.charge_attempt
+            assert result.state == ("pending" if delay is not None else "failed")
+            assert result.next_attempt_at == (stamp(now, seconds=delay) if delay is not None else None)
+
+
+async def test_soft_unavailable_rechecks_through_hard_deadline(services, source_factory):
+    sid = await source_factory()
+    services.add_video(sid, VIDEO)
+    failure = classify(RunResult(error={"msg": "Private video"}))
+    now = utc_now()
+    with services.db.transaction() as conn:
+        for delay_days in [1, 7, 30, None]:
+            video, source_id = claim_video(conn, stamp(now))
+            assert source_id == sid
+            decision = plan_retry(services.config.retry, video, failure, now=now)
+            assert decision.state == "unavailable" and not decision.charge_attempt
+            conn.execute(
+                "UPDATE videos SET state=?,next_attempt_at=?,category_attempts_json=?,last_category=? WHERE video_id=?",
+                (decision.state, decision.next_attempt_at, json.dumps(decision.category_attempts), failure.category, VIDEO),
+            )
+            if delay_days is None:
+                assert decision.next_attempt_at is None
+                assert stamp(now) > video["give_up_at"]
+                assert claim_video(conn, stamp(now + timedelta(days=90))) is None
+                assert conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "unavailable"
+            else:
+                now += timedelta(days=delay_days)
+                assert decision.next_attempt_at == stamp(now)
+                assert claim_video(conn, stamp(now, seconds=-1)) is None
 
 
 def test_global_breaker_cooldown_and_hold(services):

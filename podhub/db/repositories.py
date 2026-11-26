@@ -86,8 +86,7 @@ def expire_deadlines(conn: sqlite3.Connection, now: str) -> None:
     conn.execute(
         """UPDATE videos SET state=CASE WHEN state='deferred' AND last_category='not_ready' THEN 'unavailable' ELSE 'failed' END,
            next_attempt_at=NULL, updated_at=?
-           WHERE state IN ('pending','deferred','unavailable') AND give_up_at<=?
-           AND (state!='unavailable' OR next_attempt_at IS NOT NULL)""", (now, now),
+           WHERE state IN ('pending','deferred') AND give_up_at<=?""", (now, now),
     )
 
 

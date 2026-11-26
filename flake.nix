@@ -58,7 +58,7 @@
           defaultAccount = "pod-hub";
           toml = pkgs.formats.toml {};
           configFile = toml.generate "pod-hub-config.toml" (lib.recursiveUpdate {
-            paths = { state_dir = toString cfg.stateDir; output_dir = toString cfg.outputDir; };
+            paths = { state_dir = cfg.stateDir; output_dir = cfg.outputDir; };
             web = { listen_host = cfg.listenAddress; listen_port = cfg.port; base_url = cfg.baseUrl; };
             toolchain = {
               ytdlp_python = "${toolPython pkgs cfg.ytdlpPackage}/bin/python3";
@@ -77,23 +77,27 @@
             listenAddress = lib.mkOption { type = lib.types.str; default = "127.0.0.1"; description = "HTTP listen address."; };
             port = lib.mkOption { type = lib.types.port; default = 8000; description = "HTTP listen port."; };
             baseUrl = lib.mkOption { type = lib.types.str; default = "http://127.0.0.1:8000"; description = "Public URL used in feeds."; };
-            stateDir = lib.mkOption { type = lib.types.path; default = "/var/lib/pod-hub"; description = "Private database, backups and working state."; };
-            outputDir = lib.mkOption { type = lib.types.path; default = "/var/lib/pod-hub/output"; description = "Published podcast folders."; };
+            stateDir = lib.mkOption { type = lib.types.str; default = "/var/lib/pod-hub"; description = "Absolute path for the private database, backups and working state."; };
+            outputDir = lib.mkOption { type = lib.types.str; default = "/var/lib/pod-hub/output"; description = "Absolute path for published podcast folders."; };
             ytdlpPackage = lib.mkPackageOption pkgs "yt-dlp" {};
             ffmpegPackage = lib.mkPackageOption pkgs "ffmpeg" {};
             jsRuntimePackage = lib.mkOption { type = lib.types.nullOr lib.types.package; default = pkgs.deno; description = "yt-dlp JavaScript runtime package."; };
-            environmentFile = lib.mkOption { type = lib.types.nullOr lib.types.path; default = null; description = "Optional systemd environment file for secrets."; };
+            environmentFile = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; description = "Absolute path to an optional systemd environment file for secrets."; };
             settings = lib.mkOption { type = toml.type; default = {}; description = "Additional TOML settings. Keep secrets in environmentFile."; };
           };
 
           config = lib.mkIf cfg.enable {
+            assertions = lib.mapAttrsToList (name: value: {
+              assertion = value == null || lib.hasPrefix "/" value;
+              message = "services.pod-hub.${name} must be an absolute path.";
+            }) { inherit (cfg) stateDir outputDir environmentFile; };
             users.groups = lib.optionalAttrs (cfg.group == defaultAccount) { ${defaultAccount} = {}; };
             users.users = lib.optionalAttrs (cfg.user == defaultAccount) {
               ${defaultAccount} = { isSystemUser = true; group = cfg.group; };
             };
             systemd.tmpfiles.rules = [
-              "d ${toString cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
-              "d ${toString cfg.outputDir} 0755 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.outputDir} 0755 ${cfg.user} ${cfg.group} -"
             ];
             systemd.services.pod-hub = {
               description = "Pod Hub podcast service";

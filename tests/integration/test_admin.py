@@ -6,11 +6,13 @@ from fastapi.testclient import TestClient
 
 from podhub.cli import main
 from podhub.core.services import Services
+from podhub.db.repositories import claim_video
+from podhub.domain.models import stamp
 from podhub.errors.taxonomy import classify
 from podhub.main import create_app
 from podhub.ytdlp.runner import RunResult
 
-from conftest import CHANNEL, COOKIES, OTHER, VIDEO
+from conftest import CHANNEL, COOKIES, OTHER, THIRD, VIDEO
 
 
 def test_admin_source_preview_confirm_and_actions(services):
@@ -30,6 +32,7 @@ def test_admin_source_preview_confirm_and_actions(services):
         assert response.status_code == 200
         assert CHANNEL in response.text and "Included long episode" in response.text
         assert "Filtered · Below minimum duration" in response.text
+        assert 'name="slug" value="example-channel"' in response.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', response.text)[1]
         assert client.post("/admin/sources", data={"ticket": f"{ticket}a", "initial_backfill_count": 1}).status_code == 400
         confirm = client.post("/admin/sources", data={"ticket": ticket, "initial_backfill_count": 1}, follow_redirects=False)
@@ -60,6 +63,23 @@ def test_admin_source_preview_confirm_and_actions(services):
         assert client.get(detail).status_code == 404
 
 
+def test_admin_slug_override_rejects_invalid_and_conflicting_folders(services):
+    root = services.config.paths.output_dir
+    (root / "example-channel").mkdir()
+    (root / "dangling").symlink_to(root / "missing")
+    with TestClient(create_app(services=services, run_scheduler=False)) as client:
+        preview = client.post("/admin/sources/preview", data={"source_input": "@example"})
+        assert 'name="slug" value="example-channel-2"' in preview.text
+        ticket = re.search(r'name="ticket" value="([^"]+)"', preview.text)[1]
+        form = {"ticket": ticket, "initial_backfill_count": 1}
+        for slug in ("../escape", "Upper-Case", "bad--slug", "a" * 256, "example-channel", "dangling"):
+            assert client.post("/admin/sources", data={**form, "slug": slug}).status_code == 400
+        assert not services.sources()
+        confirmed = client.post("/admin/sources", data={**form, "slug": "my-channel"}, follow_redirects=False)
+        assert confirmed.status_code == 303
+        assert services.sources()[0]["slug"] == "my-channel"
+
+
 async def test_admin_queue_status_bulk_retry_and_video_timeline(services, source_factory):
     a = await source_factory()
     services.add_video(a, VIDEO)
@@ -79,8 +99,10 @@ async def test_admin_queue_status_bulk_retry_and_video_timeline(services, source
             assert conn.execute("SELECT state FROM videos WHERE video_id=?", (OTHER,)).fetchone()[0] == "failed"
 
 
-def test_cookies_create_update_expire_validate_and_delete(services):
+async def test_cookies_create_update_expire_validate_and_delete(services, source_factory):
     services.config.notify.webhook_url = ""
+    bound = await source_factory("Bound source")
+    unbound = await source_factory("Unbound source")
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
         create = client.post("/admin/cookies", data={"action": "save", "name": "Login", "contents": COOKIES})
         assert create.status_code == 200
@@ -88,20 +110,60 @@ def test_cookies_create_update_expire_validate_and_delete(services):
         assert "Effective configuration" in create.text
         row = services.cookies()[0]
         cookie_id = row["id"]
+        services.update_source(bound, services.config.defaults, cookie_id, 1800)
+        for sid, vid in ((bound, VIDEO), (bound, OTHER), (unbound, THIRD)):
+            services.add_video(sid, vid)
         with services.db.transaction() as conn:
+            conn.execute("UPDATE videos SET state='unavailable',last_category='auth_required',give_up_at=?", (stamp(seconds=-86400),))
+            conn.execute("UPDATE source_entries SET state='candidate' WHERE video_id=?", (OTHER,))
             invalid = classify(RunResult(warnings=["cookies are no longer valid"]), used_cookie=True)
             services.breakers.trip(conn, f"cookie:{cookie_id}", invalid)
         assert services.cookies()[0]["status"] == "expired"
         assert client.post("/admin/cookies", data={
             "action": "save", "id": cookie_id, "name": "New login", "contents": COOKIES,
         }).status_code == 200
+        with services.db.connect() as conn:
+            assert conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "unavailable"
         response = client.post("/admin/cookies", data={"action": "validate", "id": cookie_id, "video": VIDEO})
         assert response.status_code == 200 and "Cookie validated." in response.text
         assert services.cookies()[0]["status"] == "active"
         assert services.list_breakers()[-1]["state"] == "closed"
+        with services.db.connect() as conn:
+            assert dict(conn.execute("SELECT video_id,state FROM videos")) == {
+                VIDEO: "pending", OTHER: "unavailable", THIRD: "unavailable",
+            }
         assert client.post("/admin/cookies", data={"action": "delete", "id": cookie_id}).status_code == 200
         assert not services.cookies()
         assert not (services.config.paths.state_dir / "cookies" / f"{cookie_id}.txt").exists()
+
+
+async def test_binding_active_cookie_requeues_only_auth_blocked_wanted_videos(services, source_factory):
+    sid = await source_factory()
+    active = services.save_cookie("Active", COOKIES)
+    expired = services.save_cookie("Expired", COOKIES)
+    for vid in (VIDEO, OTHER):
+        services.add_video(sid, vid)
+    with services.db.transaction() as conn:
+        conn.execute(
+            "UPDATE videos SET state='unavailable',last_category='auth_required',give_up_at=?,attempt_count=2",
+            (stamp(seconds=-86400),),
+        )
+        conn.execute("UPDATE videos SET last_category='soft_unavailable' WHERE video_id=?", (OTHER,))
+        services.breakers.trip(conn, f"cookie:{expired}", classify(
+            RunResult(warnings=["cookies are no longer valid"]), used_cookie=True,
+        ))
+    services.update_source(sid, services.config.defaults, expired, 1800)
+    with services.db.transaction() as conn:
+        assert claim_video(conn, stamp()) is None
+    policy_rev = services.source(sid)["policy_rev"]
+    services.update_source(sid, services.config.defaults, active, 1800)
+    assert services.source(sid)["policy_rev"] == policy_rev
+    with services.db.transaction() as conn:
+        row = conn.execute("SELECT * FROM videos WHERE video_id=?", (VIDEO,)).fetchone()
+        assert (row["state"], row["priority"], row["attempt_count"], row["next_attempt_at"]) == ("pending", 50, 0, None)
+        assert row["give_up_at"] > stamp()
+        assert claim_video(conn, stamp())[1] == sid
+        assert conn.execute("SELECT state FROM videos WHERE video_id=?", (OTHER,)).fetchone()[0] == "unavailable"
 
 
 def test_cli_uses_shared_services(config, tmp_path, capsys):
@@ -110,11 +172,13 @@ def test_cli_uses_shared_services(config, tmp_path, capsys):
         f'[paths]\nstate_dir="{config.paths.state_dir}"\noutput_dir="{config.paths.output_dir}"\n',
     )
     flags = ["--config", str(path)]
-    assert main([*flags, "sources", "add", "Listen Later", "--kind", "manual"]) == 0
+    assert main([*flags, "sources", "add", "Listen Later", "--kind", "manual", "--slug", "my-queue"]) == 0
     sid = capsys.readouterr().out.strip()
+    assert main([*flags, "sources", "add", "Other source", "--kind", "manual", "--slug", "my-queue"]) == 1
     assert main([*flags, "sources", "add-video", sid, "--", VIDEO]) == 0
     assert main([*flags, "pause"]) == 0
     service = Services(config)
+    assert service.source(int(sid))["slug"] == "my-queue"
     with service.db.connect() as conn:
         assert conn.execute("SELECT value FROM meta WHERE key='global_paused'").fetchone()[0] == "1"
         assert conn.execute("SELECT state FROM source_entries").fetchone()[0] == "wanted"
