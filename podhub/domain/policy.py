@@ -41,7 +41,7 @@ class SourcePolicy(SettingsModel):
         return self
 
     def rejection(self, info: dict[str, Any]) -> str | None:
-        # Keep discovery and the isolated tool's probe gate on the same rules.
+        # Discovery and the isolated probe share media_type and URL-based filtering.
         from podhub.ytdlp.shim import rejection
 
         return rejection(info, self.model_dump())

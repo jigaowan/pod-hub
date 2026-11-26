@@ -35,6 +35,31 @@ def test_classification_matrix(run, cookie, expected):
     assert (result.category, result.scope, result.confidence) == expected
 
 
+@pytest.mark.parametrize("message, exc_class, used_cookie, category, scope", [
+    ("Private video. Sign in if you've been granted access to this video", None, False, "soft_unavailable", "video"),
+    ("Private video. Sign in if you've been granted access to this video", None, True, "soft_unavailable", "video"),
+    ("This video is private. Sign in if you’ve been granted access.", None, True, "soft_unavailable", "video"),
+    ("This video is unavailable", None, False, "soft_unavailable", "video"),
+    ("Sign in to confirm you’re not a bot", None, True, "rate_limit_or_bot", "global"),
+    ("YouTube is requiring a captcha challenge before playback", None, False, "rate_limit_or_bot", "global"),
+    ("This content isn’t available, try again later", None, False, "rate_limit_or_bot", "global"),
+    ("This content isn‘t available", None, False, "rate_limit_or_bot", "global"),
+    ("This live stream recording is not available", None, False, "permanent_unavailable", "video"),
+    ("This video is no longer available", None, False, "permanent_unavailable", "video"),
+    ("Join this channel to get access to members-only content", None, False, "auth_required", "video"),
+    ("This video is available to this channel’s members", None, False, "auth_required", "video"),
+    ("This video is available to this channel’s members", None, True, "cookie_invalid", "cookie"),
+    ("This video is not available from your location due to geo restriction", "GeoRestrictedError", False, "soft_unavailable", "video"),
+    ("The uploader has not made this video available in your country", None, False, "soft_unavailable", "video"),
+    ("Unavailable here", "GeoRestrictedError", False, "soft_unavailable", "video"),
+])
+def test_youtube_playability_error_classification(message, exc_class, used_cookie, category, scope):
+    run = RunResult(error={"msg": message, "exc_class": exc_class}, warnings=["n challenge solving failed: Some formats may be missing."])
+    result = classify(run, used_cookie=used_cookie)
+    assert (result.category, result.scope) == (category, scope)
+    assert result.reason == message
+
+
 async def test_unknown_retries_and_deadline(services, source_factory):
     sid = await source_factory()
     services.add_video(sid, VIDEO)

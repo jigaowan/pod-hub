@@ -25,7 +25,7 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Requ
 PROBE_FIELDS = (
     "id", "title", "description", "duration", "upload_date", "timestamp",
     "release_timestamp", "live_status", "availability", "thumbnail", "channel_id", "channel", "uploader", "chapters",
-    "_type", "webpage_url", "url", "is_short", "playlist_index",
+    "_type", "webpage_url", "url", "media_type", "is_short", "playlist_index",
 )
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
 PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{2,128}")
@@ -36,6 +36,21 @@ THUMBNAIL_FORMATS = {
     "image/jpeg": "mjpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
 }
 METADATA_ESCAPES = str.maketrans({char: "\\" + char for char in "\\=;#\n"})
+YOUTUBE_WARNING_PREFIX = re.compile(r"^\[youtube\]\s+(?:[A-Za-z0-9_-]{11}:\s*)?")
+YOUTUBE_WARNING_DIAGNOSTICS = (
+    "skipping client", "skipping unsupported client", "skipping player responses",
+    "signature solving failed", "nsig extraction failed", "signature extraction failed",
+    "n challenge solving failed", "error solving n challenge", "incomplete data received",
+    "cookies are no longer valid", "formats have been skipped", "some formats may be missing",
+    "no supported javascript runtime", "no title found in player responses", "malformed storyboard",
+    "po token", "formats are possibly damaged", "requested format is not available", "no video formats found",
+)
+RESTRICTED_AVAILABILITY = {
+    "private": "Private video",
+    "needs_auth": "Sign in to watch this video",
+    "subscriber_only": "This video is available to this channel's members only",
+    "premium_only": "This video is only available to YouTube Premium members",
+}
 
 
 def canonical_video(video_id: str) -> str:
@@ -66,7 +81,8 @@ def emit(event_type: str, **fields: Any) -> None:
 
 def rejection(info: dict[str, Any], policy: dict[str, Any]) -> str | None:
     if not policy.get("include_shorts", False) and (
-        info.get("is_short") or any("/shorts/" in (info.get(key) or "") for key in ("url", "webpage_url"))
+        info.get("media_type") == "short" or info.get("is_short")
+        or any("/shorts/" in (info.get(key) or "") for key in ("url", "webpage_url"))
     ):
         return "YouTube Short"
     if not policy.get("include_live_archives", True) and info.get("live_status") == "was_live":
@@ -138,11 +154,16 @@ def hello(version: str | None, request: dict[str, Any]) -> dict[str, Any]:
 class Logger:
     def __init__(self) -> None:
         self.last_error = ""
+        self.playability_reason: str | None = None
 
     def debug(self, msg: str) -> None:
         pass
 
     def warning(self, msg: str) -> None:
+        msg = str(msg)
+        reason, n = YOUTUBE_WARNING_PREFIX.subn("", msg, count=1)
+        if n and (reason := reason.strip()) and not any(text in reason.lower() for text in YOUTUBE_WARNING_DIAGNOSTICS):
+            self.playability_reason = reason
         emit("warning", msg=msg)
 
     def error(self, msg: str) -> None:
@@ -183,7 +204,11 @@ def resolve(raw: dict[str, Any], kind: str) -> dict[str, Any]:
     }
 
 
-def http_status(exc: BaseException) -> int | None:
+class NoPlayableFormats(ValueError):
+    expected = True
+
+
+def exception_chain(exc: BaseException) -> Iterator[BaseException]:
     pending = [exc]
     seen = set()
     while pending:
@@ -191,14 +216,19 @@ def http_status(exc: BaseException) -> int | None:
         if id(current) in seen:
             continue
         seen.add(id(current))
-        for name in ("status", "status_code", "code"):
-            value = getattr(current, name, None)
-            if isinstance(value, int) and 400 <= value < 600:
-                return value
+        yield current
         info = getattr(current, "exc_info", None)
         for cause in (current.__cause__, current.__context__, getattr(current, "cause", None), info[1] if info else None):
             if isinstance(cause, BaseException):
                 pending.append(cause)
+
+
+def http_status(exc: BaseException) -> int | None:
+    for error in exception_chain(exc):
+        for name in ("status", "status_code", "code"):
+            value = getattr(error, name, None)
+            if isinstance(value, int) and 400 <= value < 600:
+                return value
     return None
 
 
@@ -499,10 +529,16 @@ def run(request: dict[str, Any]) -> int:
             emit("probe", info=info)
             if not fetch:
                 return 0
-            emit("phase", phase="gate")
             if raw.get("live_status") in ("is_upcoming", "is_live", "post_live"):
+                emit("phase", phase="gate")
                 emit("gate", action="defer", reason=raw["live_status"], release_timestamp=raw.get("release_timestamp"))
                 return 0
+            if not raw.get("formats") and not raw.get("url"):
+                raise NoPlayableFormats(
+                    logger.playability_reason or RESTRICTED_AVAILABILITY.get(raw.get("availability"))
+                    or "Requested format is not available"
+                )
+            emit("phase", phase="gate")
             policies = request.get("entry_policies") or {"source": request["policy"]}
             rejected = {key: reason for key, policy in policies.items() if (reason := rejection(info, policy))}
             if rejected and len(rejected) == len(policies):
@@ -510,8 +546,6 @@ def run(request: dict[str, Any]) -> int:
                 return 0
             phase = "download"
             emit("phase", phase=phase)
-            if not raw.get("formats") and not raw.get("url"):
-                raise ValueError("Requested format is not available")
             result = ydl.process_ie_result(raw, download=True)
             if not result:
                 raise RuntimeError(logger.last_error or "downloader returned no result")
@@ -527,8 +561,11 @@ def run(request: dict[str, Any]) -> int:
             emit("result", filepath=str(target), info=info, rejected=rejected)
             return 0
     except Exception as exc:
-        emit("error", phase=phase, exc_class=type(exc).__name__, expected=bool(getattr(exc, "expected", False)),
-             http_status=http_status(exc), msg=logger.last_error or str(exc),
+        # YoutubeDL can wrap the extractor exception in DownloadError.
+        error = next((cause for cause in exception_chain(exc) if type(cause).__name__ == "GeoRestrictedError"), exc)
+        message = str(exc) if isinstance(exc, NoPlayableFormats) else logger.last_error or str(exc)
+        emit("error", phase=phase, exc_class=type(error).__name__, expected=bool(getattr(error, "expected", False)),
+             http_status=http_status(exc), msg=message,
              traceback_tail=traceback.format_exc()[-2000:])
         return 1
 

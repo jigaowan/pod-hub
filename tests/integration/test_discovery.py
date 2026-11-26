@@ -172,3 +172,56 @@ async def test_deep_backfill_reserves_budget_for_oldest_history(services):
         assert states[OTHER] == states["oldvideo002"] == ("wanted", 10)
         assert states["oldvideo001"][0] == "candidate"
         assert get_meta(conn, f"force_deep:{sid}") == ""
+
+
+async def test_undated_uploads_onboarding_and_candidate_backfill(services):
+    playlist = "UU" + CHANNEL[2:]
+    url = f"https://www.youtube.com/playlist?list={playlist}"
+    sid = await services.add_source(SourceIdentity("playlist", playlist, "Uploads", url), url, SourcePolicy(initial_backfill_count=1))
+    # The order supplied by the test double is deliberately unrelated to the playlist positions.
+    services.runner.entries = [
+        {"id": THIRD, "timestamp": None, "upload_date": None, "sort_key": 3},
+        {"id": VIDEO, "timestamp": None, "upload_date": None, "sort_key": 1},
+        {"id": OTHER, "timestamp": None, "upload_date": None, "sort_key": 2},
+    ]
+    with services.db.transaction() as conn:
+        attempt = start_attempt(conn, "discovery", sid)
+    await services.discovery.sync(services.source(sid), attempt)
+    with services.db.connect() as conn:
+        assert dict(conn.execute("SELECT video_id,state FROM source_entries")) == {
+            VIDEO: "wanted", OTHER: "candidate", THIRD: "candidate",
+        }
+    services.source_command(sid, "backfill", count=1)
+    with services.db.connect() as conn:
+        assert dict(conn.execute("SELECT video_id,state FROM source_entries")) == {
+            VIDEO: "wanted", OTHER: "candidate", THIRD: "wanted",
+        }
+
+
+async def test_undated_uploads_deep_backfill_works_from_tail_to_head(services):
+    playlist = "UU" + CHANNEL[2:]
+    url = f"https://www.youtube.com/playlist?list={playlist}"
+    sid = await services.add_source(SourceIdentity("playlist", playlist, "Uploads", url), url, SourcePolicy(initial_backfill_count=1))
+    with services.db.transaction() as conn:
+        list_entries(conn, services.config, services.source(sid), [{"id": VIDEO, "sort_key": 1}])
+        conn.execute("UPDATE sources SET last_ok_at=? WHERE id=?", (stamp(), sid))
+        attempt = start_attempt(conn, "discovery", sid)
+
+    services.source_command(sid, "backfill", count=2)
+    services.runner.entries = [
+        {"id": VIDEO, "sort_key": 1},
+        {"id": OTHER, "sort_key": 2},
+        {"id": THIRD, "sort_key": 3},
+        {"id": "tailfeed001", "sort_key": 4},
+    ]
+    await services.discovery.sync(services.source(sid), attempt)
+    with services.db.connect() as conn:
+        states = [tuple(row) for row in conn.execute(
+            "SELECT video_id,state,sort_key FROM source_entries ORDER BY discovered_at",
+        )]
+        assert states == [
+            (VIDEO, "wanted", 1),
+            ("tailfeed001", "wanted", 4),
+            (THIRD, "wanted", 3),
+            (OTHER, "candidate", 2),
+        ]

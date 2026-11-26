@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import signal
 import sys
@@ -12,21 +13,22 @@ from urllib.request import ProxyHandler
 
 import pytest
 
+from podhub.domain.policy import SourcePolicy
+from podhub.errors.taxonomy import classify
 from podhub.ytdlp import shim
 from podhub.storage.cookies import copy_cookie
 from podhub.storage.media import atomic_publish
-from podhub.ytdlp.runner import Runner
+from podhub.ytdlp.runner import RunResult, Runner
 from podhub.ytdlp.shim import run
 
 from conftest import COOKIES, VIDEO
 
 
-@pytest.mark.parametrize("live, duration, expected", [
-    ("is_upcoming", 90, "defer"), ("is_live", 90, "defer"), ("post_live", 90, "defer"),
-    ("not_live", 2, "filter"), ("not_live", 90, "result"),
+@pytest.mark.parametrize("live, duration, media_type, expected", [
+    ("is_upcoming", 90, "livestream", "defer"), ("is_live", 90, "livestream", "defer"), ("post_live", 90, "livestream", "defer"),
+    ("not_live", 2, "video", "filter"), ("not_live", 90, "video", "result"), ("not_live", 175, "short", "filter"),
 ])
-def test_standalone_fetch_probe_gate_uses_single_ydl(tmp_path, monkeypatch, capsys, live, duration, expected):
-    import json
+def test_standalone_fetch_probe_gate_uses_single_ydl(tmp_path, monkeypatch, capsys, live, duration, media_type, expected):
     import types
 
     calls = []
@@ -46,7 +48,7 @@ def test_standalone_fetch_probe_gate_uses_single_ydl(tmp_path, monkeypatch, caps
             assert url == f"https://www.youtube.com/watch?v={VIDEO}" and not download and not process
             calls.append("extract")
             return {
-                "id": VIDEO, "live_status": live, "duration": duration, "formats": [{"id": "1"}],
+                "id": VIDEO, "live_status": live, "duration": duration, "media_type": media_type, "formats": [{"id": "1"}],
                 "channel": "原频道", "uploader": "原作者", "chapters": [{"start_time": 0, "end_time": 1, "title": "章节"}],
             }
 
@@ -74,9 +76,127 @@ def test_standalone_fetch_probe_gate_uses_single_ydl(tmp_path, monkeypatch, caps
     assert events[0]["type"] == "hello"
     probe = next(event["info"] for event in events if event["type"] == "probe")
     assert probe["formats_count"] == 1 and (probe["channel"], probe["uploader"]) == ("原频道", "原作者")
+    assert probe["media_type"] == media_type
     assert probe["chapters"][0]["title"] == "章节"
     assert events[-1].get("action", events[-1]["type"]) == expected
+    if media_type == "short":
+        assert events[-1]["reason"] == "YouTube Short"
     assert calls == (["instance", "extract", "download", "remux"] if expected == "result" else ["instance", "extract"])
+
+
+@pytest.fixture
+def probe_only(monkeypatch, tmp_path, capsys):
+    def run_probe(extract, *, cookie=False):
+        class FakeYDL:
+            def __init__(self, options):
+                assert options["ignore_no_formats_error"] is True
+                self.logger = options["logger"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def extract_info(self, url, *, download, process):
+                assert not download and not process
+                return extract(self.logger)
+
+            def process_ie_result(self, *args, **kwargs):
+                pytest.fail("unplayable video should never reach the downloader")
+
+        monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=FakeYDL))
+        monkeypatch.setitem(sys.modules, "yt_dlp.version", SimpleNamespace(__version__="2026.10.26"))
+        status = run({
+            "mode": "fetch", "url": shim.canonical_video(VIDEO), "workspace": tmp_path,
+            "cookiefile": str(tmp_path / "cookies.txt") if cookie else None,
+            "policy": {"audio_format": "bestaudio"},
+        })
+        events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert not any(event.get("phase") == "download" for event in events)
+        return status, events
+    return run_probe
+
+
+@pytest.mark.parametrize("message, cookie, availability, category", [
+    ("This video is unavailable", False, None, "soft_unavailable"),
+    ("Private video. Sign in if you've been granted access to this video", True, "needs_auth", "soft_unavailable"),
+    ("Sign in to confirm you’re not a bot", False, "needs_auth", "rate_limit_or_bot"),
+    ("Join this channel to get access to members-only content", False, "subscriber_only", "auth_required"),
+])
+def test_shim_preserves_youtube_playability_warning(probe_only, message, cookie, availability, category):
+    def extract(logger):
+        logger.warning(f"[youtube] {VIDEO}: This video is unavailable")
+        logger.warning(f"[youtube] {message}")
+        logger.warning('[youtube] Skipping client "web" since it does not support cookies')
+        logger.warning(f"[youtube] {VIDEO}: n challenge solving failed: Some formats may be missing.")
+        logger.warning(f"[youtube] {VIDEO}: Some web client https formats have been skipped as they are missing a URL.")
+        logger.warning("[youtube] Incomplete data received in embedded initial data; re-fetching using API.")
+        logger.warning("[youtube] Error solving n challenge")
+        if cookie:
+            logger.warning("[youtube] The provided YouTube account cookies are no longer valid.")
+        return {"id": VIDEO, "formats": [], "availability": availability}
+
+    status, events = probe_only(extract, cookie=cookie)
+    assert status == 1
+    error = events[-1]
+    assert (error["type"], error["phase"], error["msg"], error["expected"]) == ("error", "extract", message, True)
+    warnings = [event["msg"] for event in events if event["type"] == "warning"]
+    assert classify(RunResult(error=error, warnings=warnings), used_cookie=cookie).category == category
+
+
+@pytest.mark.parametrize("availability, message, category", [
+    ("private", "Private video", "soft_unavailable"),
+    ("needs_auth", "Sign in to watch this video", "auth_required"),
+    ("subscriber_only", "This video is available to this channel's members only", "auth_required"),
+    ("premium_only", "This video is only available to YouTube Premium members", "auth_required"),
+    ("public", "Requested format is not available", "unclassified"),
+])
+def test_shim_no_playability_reason_uses_availability_then_generic_fallback(probe_only, availability, message, category):
+    def extract(logger):
+        logger.warning(f"[youtube] {VIDEO}: n challenge solving failed: Some formats may be missing.")
+        return {"id": VIDEO, "formats": [], "availability": availability}
+
+    status, events = probe_only(extract)
+    assert status == 1
+    assert events[-1]["msg"] == message and events[-1]["phase"] == "extract"
+    assert classify(RunResult(error=events[-1])).category == category
+
+
+def test_shim_defers_upcoming_without_formats(probe_only):
+    status, events = probe_only(lambda _: {
+        "id": VIDEO, "formats": [], "live_status": "is_upcoming", "release_timestamp": 1796000000,
+    })
+    assert status == 0 and events[-1]["type"] == "gate" and events[-1]["action"] == "defer"
+    assert events[-1]["release_timestamp"] == 1796000000
+
+
+def test_shim_preserves_wrapped_geo_restriction(probe_only):
+    class GeoRestrictedError(Exception):
+        expected = True
+
+    class DownloadError(Exception):
+        pass
+
+    def extract(logger):
+        try:
+            raise GeoRestrictedError("Available elsewhere")
+        except GeoRestrictedError as exc:
+            error = DownloadError(f"ERROR: {exc}")
+            error.exc_info = sys.exc_info()
+            raise error from None
+
+    status, events = probe_only(extract)
+    assert status == 1
+    assert events[-1]["exc_class"] == "GeoRestrictedError" and events[-1]["expected"] is True
+    assert classify(RunResult(error=events[-1])).category == "soft_unavailable"
+
+
+@pytest.mark.parametrize("hints", [{"media_type": "short"}, {"is_short": True}, {"url": "https://www.youtube.com/shorts/id"}])
+def test_source_policy_recognizes_long_shorts(hints):
+    info = {"duration": 175, **hints}
+    assert SourcePolicy().rejection(info) == "YouTube Short"
+    assert SourcePolicy(include_shorts=True).rejection(info) is None
 
 
 @pytest.mark.parametrize("is_aac, codec", [(True, "copy"), (False, "aac")])

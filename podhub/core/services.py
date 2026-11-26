@@ -267,7 +267,9 @@ class Services:
                 rows = conn.execute(
                     """SELECT e.video_id FROM source_entries e JOIN videos v USING(video_id)
                        WHERE source_id=? AND e.state='candidate'
-                       ORDER BY coalesce(v.published_at,e.discovered_at), e.sort_key,e.video_id LIMIT ?""", (source_id, count),
+                       ORDER BY v.published_at IS NULL, v.published_at,
+                                CASE WHEN ?!='manual' THEN e.sort_key END DESC, e.discovered_at,e.video_id LIMIT ?""",
+                    (source_id, source["kind"], count),
                 ).fetchall()
                 for row in rows:
                     self.want(conn, source_id, row["video_id"], 10)

@@ -101,7 +101,13 @@ def list_entries(
         ).fetchone()[0]
     dated = [(parse_date(item.get("timestamp")) or parse_date(item.get("upload_date")), item) for item in entries]
     if initial or backfill is not None:
-        dated.sort(key=lambda entry: entry[0] or "", reverse=backfill is None)
+        # The stable date sort keeps the position order for undated entries and ties.
+        direction = 1 if backfill is None else -1
+        dated.sort(key=lambda entry: (entry[1].get("sort_key") is None, direction * (entry[1].get("sort_key") or 0)))
+        if backfill is None:
+            dated.sort(key=lambda entry: entry[0] or "", reverse=True)
+        else:
+            dated.sort(key=lambda entry: (entry[0] is None, entry[0] or ""))
     budget = backfill if backfill is not None else policy.initial_backfill_count
     for published, item in dated:
         vid = item.get("id")
