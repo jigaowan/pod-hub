@@ -11,18 +11,53 @@ import subprocess
 import sys
 import traceback
 from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, date, datetime
+from http.client import HTTPSConnection
 from pathlib import Path
+from time import monotonic
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.error import HTTPError
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 
 PROBE_FIELDS = (
     "id", "title", "description", "duration", "upload_date", "timestamp",
-    "release_timestamp", "live_status", "availability", "thumbnail", "channel_id",
+    "release_timestamp", "live_status", "availability", "thumbnail", "channel_id", "channel", "uploader", "chapters",
     "_type", "webpage_url", "url", "is_short", "playlist_index",
 )
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
 PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{2,128}")
+VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+THUMBNAIL_TIMEOUT = 15
+THUMBNAIL_MAX_BYTES = 5_000_000
+THUMBNAIL_FORMATS = {
+    "image/jpeg": "mjpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
+}
+METADATA_ESCAPES = str.maketrans({char: "\\" + char for char in "\\=;#\n"})
+
+
+def canonical_video(video_id: str) -> str:
+    if not VIDEO_ID.fullmatch(video_id):
+        raise ValueError("invalid YouTube video ID")
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def youtube_cover(url: str | None, *, thumbnail_only: bool = False) -> str | None:
+    if not isinstance(url, str) or not url.isascii() or any(ord(char) <= 32 or ord(char) == 127 for char in url):
+        return None
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.username is not None or parsed.port not in (None, 443):
+            return None
+    except ValueError:
+        return None
+    host = parsed.hostname or ""
+    domains = ("ytimg.com",) if thumbnail_only else ("ytimg.com", "ggpht.com", "googleusercontent.com")
+    if host == "img.youtube.com" or any(host == domain or host.endswith(f".{domain}") for domain in domains):
+        return url
+    return None
 
 
 def emit(event_type: str, **fields: Any) -> None:
@@ -167,6 +202,207 @@ def http_status(exc: BaseException) -> int | None:
     return None
 
 
+def metadata_value(value: str) -> str:
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]", "", value)
+    return cleaned.translate(METADATA_ESCAPES)
+
+
+def video_date(info: dict[str, Any]) -> str | None:
+    upload_date = info.get("upload_date")
+    if isinstance(upload_date, str):
+        try:
+            return date.fromisoformat(upload_date).isoformat()
+        except ValueError:
+            pass
+    timestamp = info.get("timestamp")
+    if isinstance(timestamp, (int, float)):
+        try:
+            return datetime.fromtimestamp(timestamp, UTC).date().isoformat()
+        except (ValueError, OverflowError, OSError):
+            pass
+    return None
+
+
+def milliseconds(value: Any) -> int | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 2**53:
+        return round(value * 1000)
+    return None
+
+
+def ffmetadata(info: dict[str, Any]) -> str:
+    video_url = canonical_video(info["id"])
+    description = info.get("description")
+    comment = f"{video_url}\n\n{description[:8192]}" if isinstance(description, str) and description else video_url
+    tags = {
+        "title": info.get("title"), "artist": info.get("channel") or info.get("uploader"),
+        "date": video_date(info), "description": comment, "comment": comment,
+    }
+    lines = [";FFMETADATA1"]
+    lines.extend(f"{key}={metadata_value(value)}" for key, value in tags.items() if isinstance(value, str) and value)
+    chapters = info.get("chapters")
+    duration = milliseconds(info.get("duration"))
+    if isinstance(chapters, list):
+        entries = []
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            start = milliseconds(chapter.get("start_time"))
+            end = milliseconds(chapter.get("end_time"))
+            title = chapter.get("title")
+            if start is None or end is None or not isinstance(title, str) or not title.strip():
+                continue
+            if duration:
+                end = min(end, duration)
+            if start < end:
+                entries.append((start, end, metadata_value(title)))
+        for start, end, title in sorted(entries):
+            lines.extend(("[CHAPTER]", "TIMEBASE=1/1000", f"START={start}", f"END={end}", f"title={title}"))
+    return "\n".join(lines) + "\n"
+
+
+class ThumbnailRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Handle redirects explicitly without reading their bodies.
+        return None
+
+
+@contextmanager
+def thumbnail_response(opener, url: str, proxy: str | None, timeout: float):
+    if opener is None:
+        # yt-dlp provides Requests when HTTPS proxies are supported by its installation.
+        from yt_dlp.dependencies import requests
+
+        if requests is None:
+            raise ValueError("HTTPS thumbnail proxy requires yt-dlp's Requests backend")
+        with requests.Session() as session:
+            request = requests.Request("GET", url, headers={"Accept-Encoding": "identity"})
+            prepared = session.prepare_request(request)
+            # Use the adapter to keep redirect handling and its body limits under our control.
+            with session.get_adapter(url).send(prepared, proxies={"https": proxy}, stream=True, timeout=timeout) as response:
+                yield response.status_code, response.headers, response.raw.stream(64 * 1024, decode_content=False)
+        return
+
+    try:
+        response = opener.open(Request(url), timeout=timeout)
+    except HTTPError as exc:
+        response = exc
+    with response:
+        yield response.code, response.headers, iter(lambda: response.read1(64 * 1024), b"")
+
+
+def download_thumbnail(url: str, target: Path, proxy: str | None) -> str:
+    if not youtube_cover(url, thumbnail_only=True):
+        raise ValueError("invalid YouTube thumbnail URL")
+    if proxy and "://" not in proxy:
+        proxy = f"http://{proxy}"
+    # Use yt-dlp's transport for SOCKS, with the same HTTPS and redirect restrictions.
+    handlers: list[Any] = [ThumbnailRedirectHandler()]
+    scheme = urlsplit(proxy).scheme.lower() if proxy else ""
+    if scheme in ("socks4", "socks4a", "socks5", "socks5h"):
+        from yt_dlp.networking._urllib import make_socks_conn_class
+
+        class SocksHTTPSHandler(HTTPSHandler):
+            def https_open(self, req):
+                return self.do_open(make_socks_conn_class(HTTPSConnection, proxy), req, context=self._context)
+
+        handlers.extend((ProxyHandler({}), SocksHTTPSHandler()))
+    elif proxy and scheme != "https":
+        if scheme != "http":
+            raise ValueError("unsupported thumbnail proxy protocol")
+        handlers.append(ProxyHandler({"https": proxy}))
+    opener = None if scheme == "https" else build_opener(*handlers)
+    deadline = monotonic() + THUMBNAIL_TIMEOUT
+    for _ in range(4):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("thumbnail download timed out")
+        with thumbnail_response(opener, url, proxy, remaining) as (status, headers, chunks):
+            if status in (301, 302, 303, 307, 308):
+                location = headers.get("Location")
+                if not location:
+                    raise ValueError("thumbnail redirect is missing its destination")
+                url = urljoin(url, location)
+                if not youtube_cover(url, thumbnail_only=True):
+                    raise ValueError("thumbnail redirect is outside the YouTube thumbnail allowlist")
+                continue
+            if status != 200:
+                raise ValueError(f"thumbnail download returned HTTP {status}")
+            decoder = THUMBNAIL_FORMATS.get(headers.get("Content-Type", "").split(";", 1)[0].strip().lower())
+            length = headers.get("Content-Length")
+            if decoder is None or (length is not None and int(length) > THUMBNAIL_MAX_BYTES):
+                raise ValueError("invalid thumbnail type or size")
+            with target.open("wb") as output:
+                for chunk in chunks:
+                    if monotonic() >= deadline:
+                        raise TimeoutError("thumbnail download timed out")
+                    if output.tell() + len(chunk) > THUMBNAIL_MAX_BYTES:
+                        raise ValueError("thumbnail exceeds the download size limit")
+                    output.write(chunk)
+        return decoder
+    raise ValueError("too many thumbnail redirects")
+
+
+def convert(ffmpeg: str, *args: str, timeout: int | None = None) -> None:
+    result = subprocess.run(
+        [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args],
+        capture_output=True, text=True, errors="replace", timeout=timeout,
+    )
+    if result.returncode:
+        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[-1500:]}")
+
+
+def mux_audio(ffmpeg: str, audio: Path, target: Path, *, is_aac: bool,
+              metadata: Path | None = None, cover: Path | None = None) -> None:
+    inputs = ["-i", str(audio)]
+    mapping = ["-map", "0:a:0"]
+    if cover is not None:
+        inputs += ["-i", str(cover)]
+        mapping += ["-map", "1:v:0", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
+    metadata_index = "-1"
+    if metadata is not None:
+        inputs += ["-f", "ffmetadata", "-i", str(metadata)]
+        metadata_index = "2" if cover is not None else "1"
+    codec = ["-c:a", "copy"] if is_aac else ["-c:a", "aac", "-b:a", "128k"]
+    convert(
+        ffmpeg, *inputs, *mapping, *codec, "-map_metadata", metadata_index, "-map_chapters", metadata_index,
+        "-movflags", "+faststart", "-f", "ipod", "--", str(target),
+    )
+
+
+def finish_audio(request: dict[str, Any], info: dict[str, Any], audio: Path, workspace: Path, *, is_aac: bool) -> Path:
+    ffmpeg = request.get("ffmpeg_path", "ffmpeg")
+    target = workspace / "audio.m4a"
+    metadata = workspace / "episode.ffmetadata"
+    try:
+        metadata.write_text(ffmetadata(info), encoding="utf-8")
+    except Exception as exc:
+        emit("warning", msg=f"Could not write episode metadata tags ({type(exc).__name__}); using audio only")
+    else:
+        if thumbnail := info.get("thumbnail"):
+            downloaded = workspace / "thumbnail.bin"
+            cover = workspace / "thumbnail.jpg"
+            try:
+                decoder = download_thumbnail(thumbnail, downloaded, request.get("proxy"))
+                convert(
+                    ffmpeg, "-protocol_whitelist", "file", "-max_pixels", "16000000",
+                    "-f", "image2", "-pattern_type", "none", "-c:v", decoder, "-i", str(downloaded),
+                    "-map", "0:v:0", "-frames:v", "1", "-map_metadata", "-1", "-c:v", "mjpeg",
+                    "--", str(cover), timeout=THUMBNAIL_TIMEOUT,
+                )
+                mux_audio(ffmpeg, audio, target, is_aac=is_aac, metadata=metadata, cover=cover)
+                return target
+            except Exception as exc:
+                emit("warning", msg=f"Could not embed episode thumbnail ({type(exc).__name__}); using audio and metadata")
+        try:
+            mux_audio(ffmpeg, audio, target, is_aac=is_aac, metadata=metadata)
+            return target
+        except Exception as exc:
+            emit("warning", msg=f"Could not embed episode metadata tags ({type(exc).__name__}); using audio only")
+    mux_audio(ffmpeg, audio, target, is_aac=is_aac)
+    return target
+
+
 def run(request: dict[str, Any]) -> int:
     logger = Logger()
     phase = "extract"
@@ -287,18 +523,7 @@ def run(request: dict[str, Any]) -> int:
             emit("phase", phase=phase)
             stream = downloads[-1] if downloads else result
             is_aac = str(stream.get("acodec", "")).startswith(("mp4a", "aac"))
-            audio = "copy" if is_aac else "aac"
-            target = workspace / "audio.m4a"
-            args = [request.get("ffmpeg_path", "ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error",
-                    "-y", "-i", str(Path(input_name).absolute()), "-map", "0:a:0", "-vn", "-c:a", audio]
-            if not is_aac:
-                args += ["-b:a", "128k"]
-            converted = subprocess.run(
-                [*args, "-movflags", "+faststart", "-f", "ipod", "--", str(target)],
-                capture_output=True, text=True,
-            )
-            if converted.returncode:
-                raise RuntimeError(f"ffmpeg conversion failed: {converted.stderr[-1500:]}")
+            target = finish_audio(request, info, Path(input_name).absolute(), workspace, is_aac=is_aac)
             emit("result", filepath=str(target), info=info, rejected=rejected)
             return 0
     except Exception as exc:

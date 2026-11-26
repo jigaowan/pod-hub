@@ -23,7 +23,7 @@ from podhub.errors.taxonomy import Classification, classify
 from podhub.postprocess.worker import PostprocessWorker
 from podhub.storage.cookies import copy_cookie
 from podhub.storage.media import atomic_publish
-from podhub.storage.paths import audio_path, canonical_video, safe_path
+from podhub.storage.paths import audio_path, canonical_video, safe_path, source_dir
 from podhub.ytdlp.ffprobe import CorruptedArtifact, MediaInfo, validate_media
 from podhub.ytdlp.runner import RunResult, Runner, redact
 
@@ -52,7 +52,16 @@ class Downloader:
         origin: Path, *, hardlink: bool,
     ) -> Path:
         root = self.config.paths.output_dir
-        dest = audio_path(root, source["slug"], video_id)
+        if hardlink:
+            dest = safe_path(source_dir(root, source["slug"]), origin.name)
+        else:
+            video = conn.execute(
+                "SELECT title,published_at,upload_date,meta_json FROM videos WHERE video_id=?", (video_id,),
+            ).fetchone()
+            title = video["title"]
+            if title == video_id:
+                title = json.loads(video["meta_json"] or "{}").get("title")
+            dest = audio_path(root, source["slug"], video_id, title, video["published_at"], video["upload_date"])
         atomic_publish(origin, dest, hardlink=hardlink)
         conn.execute(
             """UPDATE source_entries SET state='published',entry_media_path=?,published_at=?,filter_reason=NULL
@@ -159,7 +168,7 @@ class Downloader:
                         if audio.resolve().parent != workspace or audio.is_symlink():
                             raise CorruptedArtifact("shim returned an audio path outside its workspace")
                         media = await validate_media(self.config.toolchain.ffprobe_path, audio, run.probe.get("duration"))
-                        if failure and failure.category == Category.DEGRADABLE_POSTPROCESS:
+                        if failure and failure.category == Category.DEGRADABLE_POSTPROCESS and failure.reason not in run.warnings:
                             run.warnings.append(failure.reason)
                         events = self.finish_ready(video, attempt, run, audio, media, cookie_id, failure)
                     await self.notifier.send(events)

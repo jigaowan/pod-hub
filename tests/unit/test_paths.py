@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from podhub.storage.paths import default_source_slug, sanitize_folder_name, source_dir, validate_folder_name
+from podhub.storage.paths import audio_filename, default_source_slug, sanitize_folder_name, source_dir, validate_folder_name
+
+from conftest import VIDEO
 
 
 @pytest.mark.parametrize(("title", "original", "external_id", "expected"), [
@@ -53,3 +55,25 @@ def test_source_directory_rejects_symlinks(tmp_path):
     assert source_dir(tmp_path, "  対象  ") == target
     with pytest.raises(ValueError, match="symlinks"):
         source_dir(tmp_path, "別名")
+
+
+@pytest.mark.parametrize(("title", "published", "uploaded", "expected"), [
+    ("  .Cafe\u0301　番/組?  ", "2026-11-27T08:00:00Z", "20261126", f"20261127 - Café 番組 [{VIDEO}].m4a"),
+    ("中文>\x7f\x00\ud800", None, "20260107", f"20260107 - 中文 [{VIDEO}].m4a"),
+    ("短", None, None, f"短 [{VIDEO}].m4a"),
+    ("?", "unknown", "20260102", f"20260102 [{VIDEO}].m4a"),
+    (None, "2026-01-01", None, f"20260101 [{VIDEO}].m4a"),
+    (None, None, None, f"{VIDEO}.m4a"),
+    (VIDEO, None, None, f"{VIDEO} [{VIDEO}].m4a"),
+    (" .? ", None, None, f"{VIDEO}.m4a"),
+])
+def test_audio_filename(title, published, uploaded, expected):
+    assert audio_filename(VIDEO, title, published, uploaded) == expected
+
+
+def test_audio_filename_truncates_long_titles_to_utf8_limit():
+    name = audio_filename(VIDEO, "声" * 90, "2026-01-02")
+    assert name == f"20260102 - {'声' * 40} [{VIDEO}].m4a"
+    assert len(name.encode("utf-8")) < 200
+    with pytest.raises(ValueError, match="video ID"):
+        audio_filename("../escape", "合法标题")

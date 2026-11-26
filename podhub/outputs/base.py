@@ -23,6 +23,7 @@ class Episode:
     media_bytes: int
     media_duration_s: int
     sort_key: int | None
+    thumbnail_url: str | None = None
     artifacts: tuple[Artifact, ...] = ()
 
 

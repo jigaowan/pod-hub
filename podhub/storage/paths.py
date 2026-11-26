@@ -7,16 +7,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from pathvalidate import ValidationError, sanitize_filename, validate_filename
 
-VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+from podhub.domain.models import parse_date
+from podhub.ytdlp.shim import VIDEO_ID as VIDEO_ID, canonical_video as canonical_video, youtube_cover as youtube_cover
+
 COVER = re.compile(r"cover\.[a-f0-9]{16,64}\.jpg")
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
 FOLDER_NAME_MAX_BYTES = 120
-
-
-def canonical_video(video_id: str) -> str:
-    if not VIDEO_ID.fullmatch(video_id):
-        raise ValueError("invalid YouTube video ID")
-    return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def parse_video(value: str) -> str:
@@ -109,19 +105,19 @@ def source_dir(root: Path, slug: str) -> Path:
     return safe_path(root, validate_folder_name(slug))
 
 
-def audio_path(root: Path, slug: str, video_id: str) -> Path:
+def audio_filename(
+    video_id: str, title: str | None = None, published_at: str | None = None, upload_date: str | None = None,
+) -> str:
     canonical_video(video_id)
-    return safe_path(source_dir(root, slug), f"{video_id}.m4a")
+    clean_title = sanitize_folder_name(title) if title else ""
+    published = parse_date(published_at) or parse_date(upload_date)
+    day = published[:10].replace("-", "") if published else ""
+    prefix = " - ".join(part for part in (day, clean_title) if part)
+    name = f"{prefix} [{video_id}].m4a" if prefix else f"{video_id}.m4a"
+    validate_filename(name, platform="universal", max_len=200, fs_encoding="utf-8")
+    return name
 
 
-def youtube_cover(url: str | None) -> str | None:
-    if not url:
-        return None
-    parsed = urlsplit(url)
-    host = parsed.hostname or ""
-    domains = ("ytimg.com", "ggpht.com", "googleusercontent.com")
-    if parsed.scheme == "https" and not parsed.username and any(
-        host == domain or host.endswith(f".{domain}") for domain in domains
-    ):
-        return url
-    return None
+def audio_path(root: Path, slug: str, video_id: str, title: str | None = None,
+               published_at: str | None = None, upload_date: str | None = None) -> Path:
+    return safe_path(source_dir(root, slug), audio_filename(video_id, title, published_at, upload_date))

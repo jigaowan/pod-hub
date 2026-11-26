@@ -56,10 +56,10 @@ async def validate_media(ffprobe: str, path: Path, expected: float | None = None
         raise CorruptedArtifact(f"ffprobe could not read audio: {error.decode(errors='replace')[-500:]}")
     try:
         data = json.loads(output)
-        duration = float(data["format"]["duration"])
-        streams = data["streams"]
-        if not any(stream["codec_type"] == "audio" for stream in streams):
+        audio = next((stream for stream in data["streams"] if stream["codec_type"] == "audio"), None)
+        if audio is None:
             raise ValueError("no audio stream")
+        duration = float(audio.get("duration") or data["format"]["duration"])
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError("invalid audio duration")
     except (TypeError, KeyError, ValueError) as exc:

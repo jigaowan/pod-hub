@@ -13,7 +13,7 @@ from podhub.core.discovery import list_entries
 from podhub.core.retention import reconcile, sweep
 from podhub.core.scheduler import Scheduler
 from podhub.db.connection import set_meta
-from podhub.db.repositories import claim_video, start_attempt
+from podhub.db.repositories import claim_video, start_attempt, upsert_video
 from podhub.domain.models import stamp, utc_now
 from podhub.main import create_app
 from podhub.outputs.rss import ITUNES, PODCAST
@@ -41,14 +41,20 @@ async def test_atomic_publish_hardlink_deletion_and_reconciliation(services, sou
     root = services.config.paths.output_dir
     services.add_video(a, VIDEO)
     await download_one(services, sample_media)
-    original = root / "中文 Café" / f"{VIDEO}.m4a"
+    filename = f"20260105 - 中文节目 ]] [{VIDEO}].m4a"
+    original = root / "中文 Café" / filename
     assert original.read_bytes() == sample_media.read_bytes()
     assert list(original.parent.iterdir()) == [original]
 
+    with services.db.transaction() as conn:
+        upsert_video(conn, {"id": VIDEO, "title": "上游改标题", "upload_date": "20260106"})
     services.add_video(b, VIDEO)
     services.downloader.link_ready()
-    sibling = root / "日本語 放送" / f"{VIDEO}.m4a"
+    sibling = root / "日本語 放送" / filename
     assert original.samefile(sibling)
+    with services.db.connect() as conn:
+        entries = dict(conn.execute("SELECT source_id, entry_media_path FROM source_entries WHERE video_id=?", (VIDEO,)))
+        assert entries == {a: str(original.relative_to(root)), b: str(sibling.relative_to(root))}
     assert [mode for mode, _ in services.runner.calls].count("fetch") == 1
     sibling.unlink()
     orphan = original.with_name(f"{OTHER}.m4a")
@@ -122,6 +128,33 @@ async def test_unicode_folder_recovery_cover_and_media_routes(services, source_f
         assert media.status_code == 206 and media.content == sample_media.read_bytes()[:16]
 
 
+async def test_media_endpoint_confines_stored_path_to_source_folder(services, source_factory, sample_media):
+    sid = await source_factory("節目")
+    source = services.source(sid)
+    root = services.config.paths.output_dir
+    folder = root / source["slug"]
+    services.add_video(sid, VIDEO)
+    await download_one(services, sample_media)
+    foreign = root / "別の番組" / "private.m4a"
+    foreign.parent.mkdir()
+    shutil.copyfile(sample_media, foreign)
+    symlink = folder / "alias.m4a"
+    symlink.symlink_to(foreign)
+    nested = folder / "artifacts" / "nested.m4a"
+    nested.parent.mkdir()
+    shutil.copyfile(sample_media, nested)
+    media_url = f"/media/{source['feed_token']}/{VIDEO}.m4a"
+    with TestClient(create_app(services=services, run_scheduler=False)) as client:
+        assert client.head(media_url).status_code == 200
+        for path in (str(foreign), str(foreign.relative_to(root)), str(symlink.relative_to(root)),
+                     str(nested.relative_to(root)), f"{source['slug']}/../別の番組/private.m4a"):
+            with services.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE source_entries SET entry_media_path=? WHERE source_id=? AND video_id=?", (path, sid, VIDEO),
+                )
+            assert client.get(media_url).status_code == 404
+
+
 async def test_feed_range_etag_tokens_and_retention(services, source_factory, sample_media):
     sid = await source_factory("Podcast", keep_count=1, unpublish_grace_hours=1)
     row = services.source(sid)
@@ -132,7 +165,10 @@ async def test_feed_range_etag_tokens_and_retention(services, source_factory, sa
     await download_one(services, sample_media)
     with services.db.transaction() as conn:
         conn.execute("UPDATE videos SET published_at=? WHERE video_id=?", (stamp(seconds=-86400), VIDEO))
-        conn.execute("UPDATE videos SET published_at=? WHERE video_id=?", (stamp(), OTHER))
+        conn.execute("UPDATE videos SET published_at=?,thumbnail_url=? WHERE video_id=?", (stamp(), "https://evil.test/a", OTHER))
+        saved_path = conn.execute(
+            "SELECT entry_media_path FROM source_entries WHERE source_id=? AND video_id=?", (sid, VIDEO),
+        ).fetchone()[0]
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
         endpoint = f"/feeds/{token}.xml"
         url = f"/media/{token}/{VIDEO}.m4a"
@@ -143,9 +179,13 @@ async def test_feed_range_etag_tokens_and_retention(services, source_factory, sa
         assert client.head(endpoint).content == b""
         root = ET.fromstring(response.content)
         assert root.attrib == {"version": "2.0"}
+        assert root.findtext(f"channel/{{{ITUNES}}}author") == "Podcast"
         item = root.find(f".//item[guid='yt:video:{VIDEO}']")
         assert item.find("guid").attrib == {"isPermaLink": "false"}
         assert "\x01" not in item.findtext("title") and "]]>" in item.findtext("title")
+        assert item.findtext("link") == f"https://www.youtube.com/watch?v={VIDEO}"
+        assert item.find(f"{{{ITUNES}}}image").get("href") == f"https://i.ytimg.com/vi/{VIDEO}/default.jpg"
+        assert root.find(f".//item[guid='yt:video:{OTHER}']/{{{ITUNES}}}image") is None
         assert item.find("enclosure").attrib == {
             "url": f"{services.config.web.base_url}{url}", "length": str(sample_media.stat().st_size), "type": "audio/mp4",
         }
@@ -173,7 +213,7 @@ async def test_feed_range_etag_tokens_and_retention(services, source_factory, sa
         assert client.get(url).status_code == 200
         sweep(services.config, services.db, now + timedelta(hours=1, seconds=1))
         assert client.get(url).status_code == 404
-        assert not (services.config.paths.output_dir / row["slug"] / f"{VIDEO}.m4a").exists()
+        assert not (services.config.paths.output_dir / saved_path).exists()
         with services.db.transaction() as conn:
             list_entries(conn, services.config, row, [{"id": VIDEO, "title": "Rediscovered"}])
             assert conn.execute("SELECT state FROM source_entries WHERE source_id=? AND video_id=?", (sid, VIDEO)).fetchone()[0] == "evicted"

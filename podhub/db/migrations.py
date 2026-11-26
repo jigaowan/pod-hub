@@ -87,7 +87,7 @@ CREATE TABLE source_entries (
     evaluated_rev INTEGER NOT NULL DEFAULT 0,
     pinned INTEGER NOT NULL DEFAULT 0,
     sort_key INTEGER,                 -- playlist position or sequence
-    entry_media_path TEXT,            -- relative to OUTPUT_DIR: <slug>/<video_id>.m4a
+    entry_media_path TEXT,            -- relative to OUTPUT_DIR: <slug>/<audio filename>
     discovered_at TEXT NOT NULL,
     published_at TEXT,
     unpublished_at TEXT,

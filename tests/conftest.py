@@ -44,8 +44,9 @@ class FakeRunner:
                     break
             return RunResult(hello=hello, exit_code=0)
         vid = parse_qs(urlsplit(kwargs["url"]).query)["v"][0]
-        info = {"id": vid, "title": "Example audio \x01]]>", "description": "Description & a newline\n", "duration": 2,
-                "upload_date": "20260105", "live_status": "not_live", "formats_count": 1}
+        info = {"id": vid, "title": "中文节目 \x01]]>", "description": "Description & a newline\n", "duration": 2,
+                "upload_date": "20260105", "live_status": "not_live", "formats_count": 1,
+                "thumbnail": f"https://i.ytimg.com/vi/{vid}/default.jpg"}
         if mode == "probe":
             return RunResult(hello=hello, probe=info)
         if self.before_fetch:

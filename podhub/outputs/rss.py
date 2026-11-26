@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 
 from podhub.outputs.base import RenderedOutput, RenderSourceContext, feed_url, file_url
+from podhub.storage.paths import canonical_video, youtube_cover
 
 ITUNES = "http://www.itunes.com/dtds/podcast-1.0.dtd"
 PODCAST = "https://podcastindex.org/namespace/1.0"
@@ -33,7 +34,7 @@ class PodcastRSS:
         channel = ET.SubElement(root, "channel")
         for tag, value in (
             ("title", ctx.title), ("description", f"Audio from {ctx.title}"),
-            ("link", ctx.link or ctx.base_url), ("itunes:block", "Yes"),
+            ("link", ctx.link or ctx.base_url), ("itunes:author", ctx.title), ("itunes:block", "Yes"),
         ):
             ET.SubElement(channel, tag).text = clean(value)
         ET.SubElement(channel, "atom:link", {
@@ -55,6 +56,9 @@ class PodcastRSS:
         for position, episode in enumerate(episodes[:ctx.policy.max_feed_items], 1):
             item = ET.SubElement(channel, "item")
             ET.SubElement(item, "title").text = clean(episode.title)
+            ET.SubElement(item, "link").text = canonical_video(episode.video_id)
+            if thumbnail := youtube_cover(episode.thumbnail_url):
+                ET.SubElement(item, "itunes:image", href=thumbnail)
             if episode.description:
                 ET.SubElement(item, "description").text = clean(episode.description)
             ET.SubElement(item, "guid", isPermaLink="false").text = f"yt:video:{episode.video_id}"

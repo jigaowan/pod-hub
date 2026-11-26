@@ -10,7 +10,7 @@ from podhub.core.services import Services
 from podhub.db.repositories import policy_for
 from podhub.outputs.base import Artifact, Episode, RenderSourceContext
 from podhub.outputs.rss import PodcastRSS
-from podhub.storage.paths import COVER, VIDEO_ID, safe_path
+from podhub.storage.paths import COVER, VIDEO_ID, safe_path, source_dir
 
 router = APIRouter()
 ROBOTS = {"X-Robots-Tag": "noindex"}
@@ -43,7 +43,8 @@ def podcast_feed(token: str, request: Request) -> Response:
             else "v.published_at DESC,v.video_id DESC"
         )
         episodes = conn.execute(
-            f"""SELECT v.video_id,v.title,v.description,v.published_at,v.media_bytes,v.media_duration_s,e.sort_key
+            f"""SELECT v.video_id,v.title,v.description,v.published_at,v.media_bytes,v.media_duration_s,
+                       v.thumbnail_url,e.sort_key
                 FROM source_entries e JOIN videos v USING(video_id)
                 WHERE e.source_id=? AND e.state='published' AND v.state='ready'
                 ORDER BY {order} LIMIT ?""", (source["id"], policy.max_feed_items),
@@ -99,12 +100,20 @@ def media(token: str, filename: str, request: Request) -> Response:
     services: Services = request.app.state.services
     with services.db.connect() as conn:
         entry = conn.execute(
-            """SELECT e.entry_media_path FROM source_entries e JOIN sources s ON s.id=e.source_id
-               WHERE s.feed_token=? AND e.video_id=? AND e.state IN ('published','retiring')
-               AND e.entry_media_path=(s.slug || '/' || ?)""", (token, vid, filename),
+            """SELECT e.entry_media_path,s.slug FROM source_entries e JOIN sources s ON s.id=e.source_id
+               WHERE s.feed_token=? AND e.video_id=? AND e.state IN ('published','retiring')""", (token, vid),
         ).fetchone()
     root = services.config.paths.output_dir
-    return serve(request, existing_file(root, entry[0]) if entry else None, "audio/mp4")
+    if not entry or not entry["entry_media_path"]:
+        return not_found()
+    try:
+        folder = source_dir(root, entry["slug"])
+        path = safe_path(root, entry["entry_media_path"])
+        if path.parent != folder or path.suffix != ".m4a" or not path.is_file():
+            return not_found()
+    except (ValueError, OSError, RuntimeError):
+        return not_found()
+    return serve(request, path, "audio/mp4")
 
 
 @router.api_route("/covers/{token}/{filename}", methods=["GET", "HEAD"])
