@@ -1,2 +1,0 @@
-"""View model helpers."""
-

@@ -1,0 +1,22 @@
+<div class="preview">
+  <h3>{{ preview.identity.title }}</h3>
+  <p><code>{{ preview.identity.external_id }}</code></p>
+  {% if preview_cover %}
+  <img class="cover-preview" src="{{ preview_cover }}" alt="Source artwork" width="96" height="96" referrerpolicy="no-referrer">
+  {% endif %}
+  {% if entries %}
+  <div class="table-scroll"><table>
+    <thead><tr><th>Video</th><th>Duration (seconds)</th><th>Filter result</th></tr></thead>
+    <tbody>
+    {% for item, reason in entries %}
+      <tr><td>{{ item.title or item.id }}</td><td>{{ item.duration or '—' }}</td><td>{{ 'Filtered · ' ~ reason if reason else 'Included' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  <form method="post" action="/admin/sources" class="control-row">
+    <input type="hidden" name="ticket" value="{{ ticket }}">
+    <label>Initial backfill <input type="number" name="initial_backfill_count" min="0" required value="{{ policy.initial_backfill_count }}"></label>
+    <button>Confirm &amp; Add</button>
+  </form>
+</div>

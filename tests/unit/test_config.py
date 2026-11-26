@@ -1,96 +1,46 @@
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
-from app.config import Settings
+from podhub.config import Config, load_config
+from podhub.domain.policy import SourcePolicy
+from podhub.storage.paths import canonical_video, parse_video
 
-
-def test_fetch_batch_size_defaults_to_three(tmp_path: Path) -> None:
-    settings = Settings(
-        BASE_URL="https://podhub.example.com",
-        MEDIA_DIR=str(tmp_path / "media"),
-        DATABASE_PATH=str(tmp_path / "podhub.db"),
-    )
-
-    assert settings.fetch_batch_size == 3
+from conftest import VIDEO
 
 
-def test_alarm_config_defaults_to_disabled(tmp_path: Path) -> None:
-    settings = Settings(
-        BASE_URL="https://podhub.example.com",
-        MEDIA_DIR=str(tmp_path / "media"),
-        DATABASE_PATH=str(tmp_path / "podhub.db"),
-    )
-
-    assert settings.alarm_url is None
-    assert settings.alarm_custom_psk is None
-    assert settings.alarm_tg_user_id is None
-    assert settings.alarm_timeout_seconds == 10
-
-
-def test_alarm_config_accepts_complete_values(tmp_path: Path) -> None:
-    settings = Settings(
-        BASE_URL="https://podhub.example.com",
-        MEDIA_DIR=str(tmp_path / "media"),
-        DATABASE_PATH=str(tmp_path / "podhub.db"),
-        ALARM_URL="https://alarm.ogiso.me",
-        ALARM_CUSTOM_PSK="12345",
-        ALARM_TG_USER_ID="67890",
-        ALARM_TIMEOUT_SECONDS=5,
-    )
-
-    assert settings.alarm_url == "https://alarm.ogiso.me"
-    assert settings.alarm_custom_psk == "12345"
-    assert settings.alarm_tg_user_id == "67890"
-    assert settings.alarm_timeout_seconds == 5
+def test_config_file_env_and_redaction(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('[web]\nlisten_port = 9000\nbase_url = "https://pod.example/"\n[toolchain]\nytdlp_python = "/system/python"\n')
+    monkeypatch.setenv("PODHUB_CONFIG", str(path))
+    monkeypatch.setenv("PODHUB_BASE_URL", "https://other.example")
+    monkeypatch.setenv("PODHUB_WEB__BASE_URL", "https://preferred.example/")
+    monkeypatch.setenv("PODHUB_DEFAULT_YTDLP_PYTHON", "/wrapped/python")
+    monkeypatch.setenv("PODHUB_WEBHOOK_URL", "https://hook.example/SECRET")
+    monkeypatch.setenv("PODHUB_RETRY__UNCLASSIFIED_BACKOFF_S", "[5, 10]")
+    config = load_config()
+    assert config.web.listen_port == 9000
+    assert config.web.base_url == "https://preferred.example"
+    assert config.toolchain.ytdlp_python == "/system/python"
+    assert config.retry.unclassified_backoff_s == [5, 10]
+    assert config.redacted()["notify"]["webhook_url"] == "<redacted>"
 
 
-def test_alarm_config_rejects_partial_values(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="must be set together"):
-        Settings(
-            BASE_URL="https://podhub.example.com",
-            MEDIA_DIR=str(tmp_path / "media"),
-            DATABASE_PATH=str(tmp_path / "podhub.db"),
-            ALARM_URL="https://alarm.ogiso.me",
-        )
+@pytest.mark.parametrize("relative", [".", "tmp", "cookies/nested", "app.db"])
+def test_output_cannot_overlap_private_state(tmp_path, relative):
+    with pytest.raises(ValueError, match="overlaps private state"):
+        Config.model_validate({"paths": {"state_dir": tmp_path, "output_dir": tmp_path / relative}})
 
 
-def test_cloudflare_gateway_config_builds_fixed_whisper_url(tmp_path: Path) -> None:
-    settings = Settings(
-        BASE_URL="https://podhub.example.com",
-        MEDIA_DIR=str(tmp_path / "media"),
-        DATABASE_PATH=str(tmp_path / "podhub.db"),
-        CLOUDFLARE_AI_GATEWAY_URL=(
-            "https://gateway.ai.cloudflare.com/v1/52b5ab387ad5f461c620fa6c038b1cc0/default/"
-            "compat/chat/completions"
-        ),
-        CLOUDFLARE_API_TOKEN="secret",
-    )
-
-    assert settings.transcription_configured is True
-    assert settings.cloudflare_whisper_url == (
-        "https://gateway.ai.cloudflare.com/v1/52b5ab387ad5f461c620fa6c038b1cc0/default/"
-        "workers-ai/@cf/openai/whisper-large-v3-turbo"
-    )
+def test_default_nixos_nested_output_is_valid(tmp_path):
+    config = Config.model_validate({"paths": {"state_dir": tmp_path, "output_dir": tmp_path / "output"}})
+    assert config.paths.output_dir == tmp_path / "output"
 
 
-def test_cloudflare_gateway_config_rejects_partial_values(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="must be set together"):
-        Settings(
-            BASE_URL="https://podhub.example.com",
-            MEDIA_DIR=str(tmp_path / "media"),
-            DATABASE_PATH=str(tmp_path / "podhub.db"),
-            CLOUDFLARE_AI_GATEWAY_URL="https://gateway.ai.cloudflare.com/v1/account/default/compat",
-        )
-
-
-def test_cloudflare_gateway_config_rejects_unparseable_url(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="Cloudflare AI Gateway URL"):
-        Settings(
-            BASE_URL="https://podhub.example.com",
-            MEDIA_DIR=str(tmp_path / "media"),
-            DATABASE_PATH=str(tmp_path / "podhub.db"),
-            CLOUDFLARE_AI_GATEWAY_URL="https://example.com/v1/account/default/compat",
-            CLOUDFLARE_API_TOKEN="secret",
-        )
+def test_input_validation():
+    assert parse_video(f"https://youtu.be/{VIDEO}") == VIDEO
+    assert canonical_video(VIDEO).endswith(f"v={VIDEO}")
+    with pytest.raises(ValueError):
+        parse_video(f"https://youtube.com.evil.example/watch?v={VIDEO}")
+    with pytest.raises(ValueError, match="invalid title pattern"):
+        SourcePolicy(title_include_regex="[")

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "macros.html" import action, attempts_table %}
+{% block content %}
+{% set url = '/admin/videos/' ~ video.video_id %}
+<section class="panel stack">
+  <dl>
+    <dt>Video</dt><dd><a href="https://www.youtube.com/watch?v={{ video.video_id }}" rel="noreferrer">{{ video.video_id }}</a></dd>
+    <dt>State</dt><dd>{{ video.state }}</dd><dt>Priority</dt><dd>{{ video.priority }}</dd>
+    <dt>Published</dt><dd>{{ video.published_at or '—' }}</dd>
+    <dt>Duration</dt><dd>{{ video.media_duration_s or video.duration_s or '—' }} seconds</dd>
+    <dt>Availability</dt><dd>{{ video.availability or '—' }}</dd>
+    <dt>Next attempt</dt><dd>{{ video.next_attempt_at or '—' }}</dd>
+    <dt>Give up at</dt><dd>{{ video.give_up_at or '—' }}</dd>
+    <dt>Last error</dt><dd>{{ video.last_error or '—' }}</dd>
+  </dl>
+  {% if video.description %}<details><summary>Description</summary><p class="wrap">{{ video.description }}</p></details>{% endif %}
+  <div class="actions">
+    {% if video.state not in ['ready', 'running', 'purged'] %}
+    {{ action(url,'retry','Retry Now',variant='secondary') }}
+    {{ action(url,'prioritize','Prioritize',variant='secondary') }}
+    {{ action(url,'skip','Mark Unavailable',variant='danger') }}
+    {% endif %}
+  </div>
+</section>
+<section class="panel">
+  <h2>Source folders</h2>
+  {% for row in folders %}
+  <p><a href="/admin/sources/{{ row.id }}">{{ row.title }}</a> · <code>{{ row.entry_media_path or row.slug ~ '/' }}</code> · {{ row.state }}</p>
+  {% else %}<p>No linked sources.</p>{% endfor %}
+</section>
+<section class="panel"><h2>Attempt timeline</h2>{{ attempts_table(attempts, true) }}</section>
+{% endblock %}

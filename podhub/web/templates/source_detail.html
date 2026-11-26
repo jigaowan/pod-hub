@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "macros.html" import action, rss_input, filter_fields, profile_select, pagination %}
+{% block content %}
+{% set url = '/admin/sources/' ~ source.id %}
+<section class="panel stack">
+  <div class="section-head">
+    <div><span class="badge {{ 'good' if source.enabled else 'warn' }}">{{ 'Enabled' if source.enabled else 'Paused' }}</span> {{ source.kind }} · <code>{{ source.slug }}/</code></div>
+    <div class="actions">
+      {% if source.kind != 'manual' %}{{ action(url,'sync','Sync Now',variant='secondary') }}{% endif %}
+      {{ action(url,'pause' if source.enabled else 'resume','Pause' if source.enabled else 'Resume',variant='secondary') }}
+    </div>
+  </div>
+  {{ rss_input(rss, source.id) }}
+  {{ action(url,'rotate','Rotate Token',variant='secondary') }}
+  {% if source.last_error_message %}<p class="warn-text wrap">{{ source.last_error_message }}</p>{% endif %}
+</section>
+<div class="split">
+  <section class="panel">
+    <h2>Add Single Video</h2>
+    <form method="post" action="{{ url }}" class="control-row">
+      <label>YouTube video URL or ID <input name="video" required></label>
+      <button name="action" value="add-video">Add Video</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h2>Backfill</h2>
+    <form method="post" action="{{ url }}" class="control-row">
+      <label>Oldest eligible candidates <input name="count" type="number" min="1" value="5" required></label>
+      <button name="action" value="backfill" class="secondary">Trigger Backfill</button>
+    </form>
+  </section>
+</div>
+<section class="panel">
+  <details>
+    <summary>Filter, retention and feed policy</summary>
+    <form method="post" action="{{ url }}" class="stack">
+      <div class="form-grid">
+        {{ filter_fields(policy) }}
+        <label>Keep count (0 = unlimited) <input name="keep_count" type="number" min="0" value="{{ policy.keep_count }}" required></label>
+        <label>Keep days (0 = forever) <input name="keep_days" type="number" min="0" value="{{ policy.keep_days }}" required></label>
+        <label>Unpublish grace (hours) <input name="unpublish_grace_hours" type="number" min="0" step="any" value="{{ policy.unpublish_grace_hours }}" required></label>
+        <label>Maximum feed items <input name="max_feed_items" type="number" min="1" value="{{ policy.max_feed_items }}" required></label>
+        <label>Feed order <select name="feed_order">
+          <option value="published_desc" {% if policy.feed_order == 'published_desc' %}selected{% endif %}>Newest published first</option>
+          <option value="playlist_serial" {% if policy.feed_order == 'playlist_serial' %}selected{% endif %}>Playlist serial</option>
+        </select></label>
+        <label>Playlist scan mode <select name="playlist_scan_mode">
+          <option value="full_flat" {% if policy.playlist_scan_mode == 'full_flat' %}selected{% endif %}>Full flat scan</option>
+          <option value="head_early_stop" {% if policy.playlist_scan_mode == 'head_early_stop' %}selected{% endif %}>Stop at known items</option>
+        </select></label>
+        <label>Maximum scan items <input name="max_scan_items" type="number" min="1" value="{{ policy.max_scan_items }}" required></label>
+        <label>Consecutive known items <input name="early_stop_known" type="number" min="1" value="{{ policy.early_stop_known }}" required></label>
+        <label>Audio format <input name="audio_format" value="{{ policy.audio_format }}" required></label>
+        <label>Check interval (seconds) <input name="check_interval" type="number" min="1" value="{{ source.check_interval_s }}" required></label>
+        {{ profile_select(cookies, source.cookie_profile_id) }}
+      </div>
+      <button name="action" value="policy" class="fit">Save Policy</button>
+    </form>
+  </details>
+</section>
+<section class="panel">
+  <h2>Episodes</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Video</th><th>Entry</th><th>Video state</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      {% set episode_url = url ~ '/episodes/' ~ row.video_id %}
+      <tr>
+        <td><a href="/admin/videos/{{ row.video_id }}">{{ row.title }}</a></td>
+        <td>{{ row.state }}{% if row.pinned %} · Pinned{% endif %}{% if row.filter_reason %}<br>{{ row.filter_reason }}{% endif %}</td>
+        <td>{{ row.video_state }}</td>
+        <td class="actions">
+          {% if row.state not in ['retiring', 'evicted'] %}
+          {{ action(episode_url, 'unpin' if row.pinned else 'pin', 'Unpin' if row.pinned else 'Pin', variant='secondary') }}
+          {% endif %}
+          {% if row.state in ['candidate','filtered'] %}{{ action(episode_url,'promote','Promote',variant='secondary') }}{% endif %}
+          {% if row.state in ['candidate','wanted'] %}{{ action(episode_url,'skip','Skip',variant='secondary') }}{% endif %}
+          {% if row.state == 'wanted' %}{{ action(episode_url,'retry','Retry',variant='secondary') }}{% endif %}
+        </td>
+      </tr>
+    {% else %}<tr><td colspan="4">No episodes yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {{ pagination(page, more) }}
+</section>
+{% macro delete_form() %}
+<form method="post" action="{{ url }}" class="stack">
+  <label class="check"><input type="radio" name="files" value="keep" required> Keep files on disk</label>
+  <label class="check"><input type="radio" name="files" value="delete" required> Delete source folder on disk</label>
+  <button class="danger fit" name="action" value="delete">Delete Source</button>
+</form>
+{% endmacro %}
+<button class="danger js-only" data-dialog="delete-source">Delete Source</button>
+<dialog id="delete-source" aria-labelledby="delete-title">
+  <div class="section-head"><h2 id="delete-title">Delete {{ source.title }}</h2><form method="dialog"><button class="secondary">Cancel</button></form></div>
+  {{ delete_form() }}
+</dialog>
+<noscript><details class="panel"><summary>Delete Source</summary>{{ delete_form() }}</details></noscript>
+{% endblock %}

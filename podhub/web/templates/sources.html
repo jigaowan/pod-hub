@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "macros.html" import action, rss_input, profile_select, filter_fields %}
+{% block content %}
+<section class="panel">
+  <h2>Add Source</h2>
+  <form method="post" action="/admin/sources/preview" hx-post="/admin/sources/preview" hx-target="#preview" hx-swap="innerHTML" class="stack">
+    <div class="form-grid">
+      <label>YouTube URL, handle, ID or collection name
+        <input name="source_input" value="{{ value or '' }}" required>
+      </label>
+      <label>Kind
+        <select name="kind">
+          {% for key, label in [('', 'Detect automatically'), ('channel','Channel'),('playlist','Playlist'),('manual','Manual collection')] %}
+          <option value="{{ key }}" {% if selected == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {{ profile_select(cookies, profile) }}
+    </div>
+    <details><summary>Initial filters</summary><div class="form-grid">{{ filter_fields(policy) }}</div></details>
+    <button class="fit">Preview</button>
+  </form>
+  <div id="preview" aria-live="polite">{% if preview %}{% include "source_preview.html" %}{% endif %}</div>
+</section>
+<section class="panel">
+  <h2>Subscriptions</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Source</th><th>Kind / Folder</th><th>Status</th><th>Last check (UTC)</th><th>Published / Wanted / Failed</th><th>RSS</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for row in sources %}
+      <tr>
+        <td><a href="/admin/sources/{{ row.id }}">{{ row.title }}</a></td>
+        <td>{{ row.kind }}<br><code>{{ row.slug }}/</code></td>
+        <td>{{ 'Paused' if not row.enabled else (row.last_error_category or 'Enabled') }}</td>
+        <td>{{ row.last_checked_at[:19]|replace('T',' ') if row.last_checked_at else '—' }}</td>
+        <td>{{ row.published_count or 0 }} / {{ row.wanted_count or 0 }} / {{ row.failed_count or 0 }}</td>
+        <td>{{ rss_input(base_url ~ '/feeds/' ~ row.feed_token ~ '.xml', row.id) }}</td>
+        <td class="actions">
+          {% if row.kind != 'manual' %}{{ action('/admin/sources/' ~ row.id,'sync','Sync Now','from_list','yes','secondary') }}{% endif %}
+          {{ action('/admin/sources/' ~ row.id, 'pause' if row.enabled else 'resume', 'Pause' if row.enabled else 'Resume','from_list','yes','secondary') }}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="7">No subscriptions yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

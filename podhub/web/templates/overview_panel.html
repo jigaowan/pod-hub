@@ -1,0 +1,50 @@
+{% from "macros.html" import action, attempts_table %}
+<div id="overview-panel" hx-get="/admin/status" hx-trigger="every 15s" hx-swap="outerHTML">
+  <section class="panel status-line" aria-label="Service status">
+    <div><strong class="badge {{ 'warn' if paused else 'good' }}">{{ 'Paused' if paused else 'Running' }}</strong>
+      {% if reason %}<span class="muted">{{ reason }}</span>{% endif %}
+    </div>
+    {{ action('/admin/system', 'resume' if paused else 'pause', 'Resume' if paused else 'Pause', variant='secondary') }}
+  </section>
+  <div class="split">
+    <section class="panel">
+      <div class="section-head"><h2>Toolchain & System Health</h2>{{ action('/admin/system','doctor','Run Doctor Check', variant='secondary') }}</div>
+      <dl>
+        <dt>yt-dlp</dt><dd>{{ report.ytdlp_version or 'Unchecked' }}</dd>
+        <dt>FFmpeg</dt><dd>{{ report.ffmpeg_version or 'Unchecked' }}</dd>
+        <dt>JavaScript runtime</dt><dd>{{ report.js_runtime_version or report.js_runtime or '—' }}</dd>
+        <dt>Disk free</dt><dd>{{ '%.1f'|format(disk.state / 1073741824) }} GiB state · {{ '%.1f'|format(disk.output / 1073741824) }} GiB output</dd>
+        <dt>Last successful download</dt><dd>{{ last_download }}</dd>
+      </dl>
+      {% if report.error %}<p role="status" class="warn-text">{{ report.error }}</p>{% endif %}
+      {% if orphans %}
+      <details><summary>{{ orphans|length }} unregistered audio files</summary><ul>
+        {% for path in orphans[:50] %}<li><code>{{ path }}</code></li>{% endfor %}
+      </ul></details>
+      {% endif %}
+    </section>
+    <section class="panel">
+      <h2>Queue</h2>
+      <dl>
+        {% for key in ['pending','running','deferred','failed','unavailable','ready'] %}
+        <dt>{{ key|capitalize }}</dt><dd>{{ counts.get(key, 0) }}</dd>
+        {% endfor %}
+      </dl>
+      <a href="/admin/videos">Open queue</a>
+    </section>
+  </div>
+  <section class="stack">
+    <h2>Circuit breakers</h2>
+    <div class="cards">
+    {% for row in breakers %}
+      <article class="panel">
+        <div class="section-head"><h3>{{ row.key }}</h3><span class="badge {{ 'good' if row.state == 'closed' else 'warn' }}">{{ row.state|replace('_',' ') }}</span></div>
+        {% if row.reason_message %}<p class="wrap">{{ row.reason_message }}</p>{% endif %}
+        {% if row.open_until %}<p class="muted">Until {{ row.open_until[:19]|replace('T',' ') }} UTC</p>{% endif %}
+        {% if row.state != 'closed' %}{{ action('/admin/system','reset','Reset','key',row.key,'secondary') }}{% endif %}
+      </article>
+    {% endfor %}
+    </div>
+  </section>
+  <section class="panel"><h2>Recent attempts</h2>{{ attempts_table(attempts) }}</section>
+</div>

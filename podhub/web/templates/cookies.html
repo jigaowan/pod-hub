@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "macros.html" import action %}
+{% block content %}
+{% macro editor(row=none) %}
+<form method="post" action="/admin/cookies" class="stack" enctype="multipart/form-data">
+  {% if row %}<input type="hidden" name="id" value="{{ row.id }}">{% endif %}
+  <div class="form-grid">
+    <label>Name <input name="name" value="{{ row.name if row else '' }}" required></label>
+    <label>Note <input name="note" value="{{ row.note or '' if row else '' }}"></label>
+  </div>
+  <label>Netscape cookie file contents <textarea name="contents" rows="5" required autocomplete="off" spellcheck="false"></textarea></label>
+  <button name="action" value="save" class="fit">{{ 'Update Profile' if row else 'Create Profile' }}</button>
+</form>
+{% endmacro %}
+{% if validated in ['ok', 'failed'] %}
+<p role="status" class="panel">{{ 'Cookie validated.' if validated == 'ok' else 'Cookie validation failed. See Recent attempts on the Overview.' }}</p>
+{% endif %}
+<section class="panel"><h2>Create Cookie Profile</h2>{{ editor() }}</section>
+<section class="panel stack">
+  <h2>Cookie profiles</h2>
+  {% for row in rows %}
+  <article class="profile">
+    <div class="section-head"><h3>{{ row.name }}</h3><span class="badge {{ 'good' if row.status == 'active' else 'warn' }}">{{ row.status }}</span></div>
+    <dl>
+      <dt>Earliest expiry</dt><dd>{{ row.earliest_expiry or 'Session cookies' }}</dd>
+      <dt>Last success</dt><dd>{{ row.last_ok_at or '—' }}</dd>
+      <dt>Last failure</dt><dd>{{ row.last_fail_at or '—' }}</dd>
+    </dl>
+    <form method="post" action="/admin/cookies" class="control-row">
+      <input type="hidden" name="id" value="{{ row.id }}">
+      <label>Test video URL (optional) <input name="video"></label>
+      <button name="action" value="validate" class="secondary">Validate Cookie</button>
+    </form>
+    <details><summary>Update Profile</summary>{{ editor(row) }}</details>
+    <details><summary>Delete Profile</summary>{{ action('/admin/cookies','delete','Delete Profile','id',row.id,'danger') }}</details>
+  </article>
+  {% else %}<p>No cookie profiles.</p>{% endfor %}
+</section>
+<section class="panel stack">
+  <div class="section-head"><h2>Effective configuration</h2><a class="button secondary" href="/admin/export/opml">Download OPML</a></div>
+  <pre>{{ config }}</pre>
+</section>
+{% endblock %}

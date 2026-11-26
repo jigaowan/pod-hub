@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"400","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
+  <title>{{ title }} · Pod Hub</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='admin.css').path }}">
+  <script defer src="{{ url_for('static', path='htmx.min.js').path }}"></script>
+  <script defer src="{{ url_for('static', path='admin.js').path }}"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="frame bar">
+    <a class="brand" href="/admin">Pod Hub</a>
+    <nav aria-label="Management">
+      {% for key, label, url in [('overview','Overview','/admin'),('sources','Sources','/admin/sources'),('videos','Videos & Queue','/admin/videos'),('cookies','Cookies & Config','/admin/cookies')] %}
+      <a href="{{ url }}" {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
+<main id="main" class="frame">
+  <h1>{{ title }}</h1>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

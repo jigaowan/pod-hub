@@ -1,0 +1,66 @@
+{% macro action(url, value, label, field='', field_value='', variant='') %}
+<form method="post" action="{{ url }}" class="inline">
+  {% if field %}<input type="hidden" name="{{ field }}" value="{{ field_value }}">{% endif %}
+  <button name="action" value="{{ value }}" class="{{ variant }}">{{ label }}</button>
+</form>
+{% endmacro %}
+
+{% macro rss_input(url, key) %}
+<div class="copy-row">
+  <input id="feed-{{ key }}" type="url" aria-label="RSS feed URL" value="{{ url }}" readonly>
+  <button class="secondary copy" type="button" data-copy="feed-{{ key }}">Copy RSS URL</button>
+</div>
+{% endmacro %}
+
+{% macro profile_select(cookies, selected) %}
+<label>Cookie profile
+<select name="cookie_profile_id">
+  <option value="">None</option>
+  {% for row in cookies %}<option value="{{ row.id }}" {% if selected == row.id %}selected{% endif %}>{{ row.name }} ({{ row.status }})</option>{% endfor %}
+</select>
+</label>
+{% endmacro %}
+
+{% macro filter_fields(policy) %}
+<label>Initial backfill <input type="number" name="initial_backfill_count" min="0" value="{{ policy.initial_backfill_count }}" required></label>
+<label>Minimum duration (seconds) <input type="number" name="min_duration_s" min="0" value="{{ policy.min_duration_s }}" required></label>
+<label>Maximum duration (0 = unlimited) <input type="number" name="max_duration_s" min="0" value="{{ policy.max_duration_s }}" required></label>
+<label>Include title pattern <input name="title_include_regex" value="{{ policy.title_include_regex }}" maxlength="256"></label>
+<label>Exclude title pattern <input name="title_exclude_regex" value="{{ policy.title_exclude_regex }}" maxlength="256"></label>
+<label class="check"><input type="checkbox" name="include_shorts" {% if policy.include_shorts %}checked{% endif %}> Include Shorts</label>
+<label class="check"><input type="checkbox" name="include_live_archives" {% if policy.include_live_archives %}checked{% endif %}> Include live archives</label>
+{% endmacro %}
+
+{% macro attempts_table(attempts, detail=false) %}
+<div class="table-scroll"><table>
+  <thead><tr>
+    <th scope="col">Started (UTC)</th><th scope="col">Kind</th><th scope="col">Outcome</th>
+    <th scope="col">Phase</th><th scope="col">Category</th><th scope="col">Scope</th>
+    {% if detail %}<th scope="col">Confidence</th><th scope="col">Exit / HTTP</th><th scope="col">yt-dlp</th>{% endif %}
+    <th scope="col">Details</th>
+  </tr></thead>
+  <tbody>
+  {% for row in attempts %}
+    <tr>
+      <td><time datetime="{{ row.started_at }}">{{ row.started_at[:19]|replace('T',' ') }}</time></td>
+      <td>{{ row.kind }}{% if not detail and row.video_id %} · <a href="/admin/videos/{{ row.video_id }}">{{ row.video_id }}</a>{% endif %}</td>
+      <td>{{ row.outcome }}</td><td>{{ row.phase_reached or '—' }}</td><td>{{ row.category or '—' }}</td><td>{{ row.scope or '—' }}</td>
+      {% if detail %}<td>{{ row.confidence or '—' }}</td><td>{{ row.exit_code if row.exit_code is not none else '—' }} / {{ row.http_status or '—' }}</td><td>{{ row.ytdlp_version or '—' }}</td>{% endif %}
+      <td class="wrap">{{ row.error_excerpt or '—' }}{% if row.warnings_json and row.warnings_json != '[]' %}<details><summary>Warnings</summary><code>{{ row.warnings_json }}</code></details>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ 10 if detail else 7 }}">No attempts recorded.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endmacro %}
+
+{% macro pagination(page, more, query='') %}
+{% if page > 1 or more %}
+<nav class="pagination" aria-label="Pagination">
+  {% if page > 1 %}<a href="?{{ query }}page={{ page - 1 }}">Previous</a>{% endif %}
+  <span>Page {{ page }}</span>
+  {% if more %}<a href="?{{ query }}page={{ page + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
