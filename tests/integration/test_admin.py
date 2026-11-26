@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 
@@ -32,7 +33,8 @@ def test_admin_source_preview_confirm_and_actions(services):
         assert response.status_code == 200
         assert CHANNEL in response.text and "Included long episode" in response.text
         assert "Filtered · Below minimum duration" in response.text
-        assert 'name="slug" value="example-channel"' in response.text
+        assert 'name="title" value="Example Channel"' in response.text
+        assert 'name="slug" value="Example Channel"' in response.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', response.text)[1]
         assert client.post("/admin/sources", data={"ticket": f"{ticket}a", "initial_backfill_count": 1}).status_code == 400
         confirm = client.post("/admin/sources", data={"ticket": ticket, "initial_backfill_count": 1}, follow_redirects=False)
@@ -65,19 +67,56 @@ def test_admin_source_preview_confirm_and_actions(services):
 
 def test_admin_slug_override_rejects_invalid_and_conflicting_folders(services):
     root = services.config.paths.output_dir
-    (root / "example-channel").mkdir()
+    (root / "example channel").mkdir()
+    (root / "Cafe\u0301 音楽").mkdir()
     (root / "dangling").symlink_to(root / "missing")
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
         preview = client.post("/admin/sources/preview", data={"source_input": "@example"})
-        assert 'name="slug" value="example-channel-2"' in preview.text
+        assert 'name="slug" value="Example Channel-2"' in preview.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', preview.text)[1]
         form = {"ticket": ticket, "initial_backfill_count": 1}
-        for slug in ("../escape", "Upper-Case", "bad--slug", "a" * 256, "example-channel", "dangling"):
+        for slug in ("../escape", ".hidden", "a" * 121, "番" * 41, "Example Channel", "Café 音楽", "dangling", "NUL"):
             assert client.post("/admin/sources", data={**form, "slug": slug}).status_code == 400
         assert not services.sources()
-        confirmed = client.post("/admin/sources", data={**form, "slug": "my-channel"}, follow_redirects=False)
+        confirmed = client.post("/admin/sources", data={
+            **form, "title": " 深夜ラジオ ", "slug": "  か\u3099く　档案 ",
+        }, follow_redirects=False)
         assert confirmed.status_code == 303
-        assert services.sources()[0]["slug"] == "my-channel"
+        source = services.sources()[0]
+        assert (source["title"], source["slug"]) == ("深夜ラジオ", "がく 档案")
+
+
+def test_admin_title_controls_default_folder_and_can_be_renamed(services):
+    with TestClient(create_app(services=services, run_scheduler=False)) as client:
+        preview = client.post("/admin/sources/preview", data={"source_input": "初期設定", "kind": "manual"})
+        assert 'name="title" value="初期設定"' in preview.text
+        assert 'name="slug" value="初期設定"' in preview.text
+        ticket = re.search(r'name="ticket" value="([^"]+)"', preview.text)[1]
+        form = {"ticket": ticket, "initial_backfill_count": 1, "slug": ""}
+        assert client.post("/admin/sources", data={**form, "title": "  "}).status_code == 400
+        confirmed = client.post("/admin/sources", data={**form, "title": "今日：中文节目"}, follow_redirects=False)
+        assert confirmed.status_code == 303
+        source = services.sources()[0]
+        assert source["slug"] == "今日：中文节目"
+        folder = services.config.paths.output_dir / source["slug"]
+        folder.mkdir()
+        (folder / "keep").touch()
+        detail = confirmed.headers["location"]
+        feed_url = f"/feeds/{source['feed_token']}.xml"
+        feed = client.get(feed_url)
+        assert ET.fromstring(feed.content).findtext("channel/title") == "今日：中文节目"
+        assert 'name="title" value="今日：中文节目"' in client.get(detail).text
+        assert client.post(detail, data={"action": "rename", "title": "   "}).status_code == 400
+        updated = client.post(detail, data={"action": "rename", "title": " 新しい名前 "})
+        assert updated.status_code == 200 and "新しい名前" in updated.text
+        updated_source = services.source(source["id"])
+        assert updated_source["slug"] == source["slug"]
+        assert updated_source["feed_token"] == source["feed_token"]
+        assert updated_source["policy_rev"] == source["policy_rev"]
+        assert (folder / "keep").is_file()
+        renamed_feed = client.get(feed_url, headers={"If-None-Match": feed.headers["etag"]})
+        assert renamed_feed.status_code == 200
+        assert ET.fromstring(renamed_feed.content).findtext("channel/title") == "新しい名前"
 
 
 async def test_admin_queue_status_bulk_retry_and_video_timeline(services, source_factory):
@@ -172,13 +211,16 @@ def test_cli_uses_shared_services(config, tmp_path, capsys):
         f'[paths]\nstate_dir="{config.paths.state_dir}"\noutput_dir="{config.paths.output_dir}"\n',
     )
     flags = ["--config", str(path)]
-    assert main([*flags, "sources", "add", "Listen Later", "--kind", "manual", "--slug", "my-queue"]) == 0
+    assert main([
+        *flags, "sources", "add", "Listen Later", "--kind", "manual", "--title", "中文电台", "--slug", "がく 再生",
+    ]) == 0
     sid = capsys.readouterr().out.strip()
-    assert main([*flags, "sources", "add", "Other source", "--kind", "manual", "--slug", "my-queue"]) == 1
+    assert main([*flags, "sources", "add", "Other source", "--kind", "manual", "--slug", "か\u3099く 再生"]) == 1
     assert main([*flags, "sources", "add-video", sid, "--", VIDEO]) == 0
     assert main([*flags, "pause"]) == 0
     service = Services(config)
-    assert service.source(int(sid))["slug"] == "my-queue"
+    source = service.source(int(sid))
+    assert (source["title"], source["slug"]) == ("中文电台", "がく 再生")
     with service.db.connect() as conn:
         assert conn.execute("SELECT value FROM meta WHERE key='global_paused'").fetchone()[0] == "1"
         assert conn.execute("SELECT state FROM source_entries").fetchone()[0] == "wanted"

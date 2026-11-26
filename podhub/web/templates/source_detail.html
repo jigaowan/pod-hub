@@ -10,6 +10,10 @@
       {{ action(url,'pause' if source.enabled else 'resume','Pause' if source.enabled else 'Resume',variant='secondary') }}
     </div>
   </div>
+  <form method="post" action="{{ url }}" class="control-row">
+    <label>Podcast title <input name="title" value="{{ source.title }}" required></label>
+    <button name="action" value="rename" class="secondary">Save Title</button>
+  </form>
   {{ rss_input(rss, source.id) }}
   {{ action(url,'rotate','Rotate Token',variant='secondary') }}
   {% if source.last_error_message %}<p class="warn-text wrap">{{ source.last_error_message }}</p>{% endif %}

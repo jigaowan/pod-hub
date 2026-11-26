@@ -19,7 +19,7 @@ from podhub.domain.enums import Category, Confidence, Scope
 from podhub.domain.models import stamp, utc_now
 from podhub.errors.taxonomy import Classification
 from podhub.storage.media import STAGING_PREFIX
-from podhub.storage.paths import SLUG
+from podhub.storage.paths import validate_folder_name
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,11 @@ class Scheduler:
             else:
                 item.unlink()
         for folder in paths.output_dir.iterdir():
-            if not SLUG.fullmatch(folder.name) or folder.is_symlink() or not folder.is_dir():
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            try:
+                validate_folder_name(folder.name)
+            except ValueError:
                 continue
             for stage in (folder, folder / "artifacts"):
                 if stage.is_dir() and not stage.is_symlink():

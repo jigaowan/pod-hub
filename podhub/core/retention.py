@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 from datetime import datetime
+from unicodedata import normalize
 
 from podhub.config import Config
 from podhub.db.connection import Database, set_meta
@@ -101,10 +102,21 @@ def reconcile(config: Config, db: Database) -> list[str]:
                 )
                 activate_video(conn, config, vid, 50)
         referenced = {row[0] for row in conn.execute("SELECT entry_media_path FROM source_entries WHERE entry_media_path IS NOT NULL")}
-        orphans = sorted(
-            str(file.relative_to(root)) for file in root.glob("*/*.m4a")
-            if file.is_file() and str(file.relative_to(root)) not in referenced
-        )
+        orphans = []
+        for file in root.glob("*/*.m4a"):
+            relative = str(file.relative_to(root))
+            if relative in referenced or not file.is_file():
+                continue
+            canonical = normalize("NFC", relative)
+            if canonical in referenced:
+                # Some filesystems list decomposed names while accepting NFC lookups.
+                try:
+                    if file.samefile(root / canonical):
+                        continue
+                except FileNotFoundError:
+                    pass
+            orphans.append(relative)
+        orphans.sort()
         if orphans:
             log.warning("Found %s unregistered audio files. First entries: %s", len(orphans), orphans[:20])
         set_meta(conn, "orphan_audio", json.dumps(orphans))

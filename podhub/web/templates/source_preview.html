@@ -16,8 +16,10 @@
   {% endif %}
   <form method="post" action="/admin/sources" class="control-row">
     <input type="hidden" name="ticket" value="{{ ticket }}">
-    <label>Folder slug <input name="slug" value="{{ suggested_slug }}" maxlength="255" pattern="[a-z0-9]+(?:-[a-z0-9]+)*"></label>
+    <label>Podcast title <input name="title" value="{{ preview.identity.title }}" required></label>
+    <label>Folder name <input name="slug" value="{{ suggested_slug }}" aria-describedby="folder-name-hint"></label>
     <label>Initial backfill <input type="number" name="initial_backfill_count" min="0" required value="{{ policy.initial_backfill_count }}"></label>
     <button>Confirm &amp; Add</button>
   </form>
+  <p id="folder-name-hint" class="muted">Use up to 120 UTF-8 bytes. Leave blank to generate the folder name from the podcast title.</p>
 </div>

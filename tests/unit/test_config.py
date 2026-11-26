@@ -4,7 +4,7 @@ import pytest
 
 from podhub.config import Config, load_config
 from podhub.domain.policy import SourcePolicy
-from podhub.storage.paths import canonical_video, default_source_slug, parse_video
+from podhub.storage.paths import canonical_video, parse_video
 
 from conftest import VIDEO
 
@@ -44,15 +44,3 @@ def test_input_validation():
         parse_video(f"https://youtube.com.evil.example/watch?v={VIDEO}")
     with pytest.raises(ValueError, match="invalid title pattern"):
         SourcePolicy(title_include_regex="[")
-
-
-@pytest.mark.parametrize(("title", "original", "external_id", "expected"), [
-    ("Café 中文", "@My_Handle", "UCFallback", "cafe"),
-    ("中文頻道", "@My_Handle", "UCFallback", "my-handle"),
-    ("放送局", "youtube.com/@Radio_Tokyo/videos", "UCFallback", "radio-tokyo"),
-    ("中文頻道", "https://www.youtube.com/@中文", "UC_AbCD", "uc-abcd"),
-    ("播放列表", "https://www.youtube.com/playlist?list=PL_AbCD", "PL_AbCD", "pl-abcd"),
-    ("[聴く]", "[聴く]", "manual:abcd", "manual-abcd"),
-])
-def test_default_source_folder_slug(title, original, external_id, expected):
-    assert default_source_slug(title, original, external_id) == expected

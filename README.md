@@ -57,7 +57,7 @@ pod-hub doctor
 pod-hub pause
 pod-hub resume
 pod-hub sources list
-pod-hub sources add @channel --initial-backfill-count 3 --slug my-channel
+pod-hub sources add @channel --initial-backfill-count 3 --title "城市电台" --slug "東京 音訊"
 pod-hub sources add "Listen Later" --kind manual
 pod-hub sources sync 1
 pod-hub sources add-video 2 'https://www.youtube.com/watch?v=VIDEO_ID'
@@ -77,6 +77,10 @@ Channel discovery normally uses conditional YouTube Atom requests. Initial, play
 
 Temporarily unavailable videos follow `retry.soft_unavailable_recheck_days`. The default delays are 1, 7, and 30 days, after which the video stays unavailable if the last recheck also fails.
 
-Each source folder contains stable video-ID filenames and content-hashed artwork. Set its name in the source preview or pass `--slug` on the CLI. The default comes from the title, the channel handle, or the source ID, in that order. The service hardlinks shared audio across source folders when possible. Retiring episodes leave the feed first and remain downloadable through the grace period. Daily maintenance reports unregistered files and retains seven SQLite backups in the private state directory. The published folders and the private cookie files should be backed up separately if needed.
+Set the podcast title and folder name in the source preview or with `--title` and `--slug` on the CLI. Leave the folder name blank in the preview to regenerate it from the edited title. Pod Hub cleans the title first, then falls back to the channel handle or source ID if needed. The source detail page lets you edit the podcast title in the RSS feed while keeping the existing folder and feed URL.
+
+Folder names support Unicode, including Chinese and Japanese. Pod Hub normalizes them to NFC, collapses whitespace, and limits each name to 120 UTF-8 bytes. Names must be portable across Linux, macOS, and Windows and cannot start with a dot. Collision checks are case-insensitive, and generated names get a numeric suffix when needed.
+
+Each source folder contains stable video-ID filenames and content-hashed artwork. The service hardlinks shared audio across source folders when possible. Retiring episodes leave the feed first and remain downloadable through the grace period. Daily maintenance reports unregistered files and retains seven SQLite backups in the private state directory. The published folders and the private cookie files should be backed up separately if needed.
 
 The post-processing registry starts empty. To extend an embedded instance, register a `PostProcessor` and pass its registry to `Services`. The worker passes a private staging directory as `PostProcessContext.artifacts_dir`. A processor returns file names relative to the final output directory, such as `my-source/artifacts/VIDEO_ID.vtt`, and the worker atomically publishes the staged files. RSS includes public `transcript_vtt` artifacts automatically.

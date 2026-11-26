@@ -31,7 +31,17 @@ from podhub.postprocess.registry import PostProcessorRegistry
 from podhub.postprocess.worker import PostprocessWorker
 from podhub.storage.cookies import copy_cookie, expiry, save_cookie
 from podhub.storage.media import save_cover
-from podhub.storage.paths import SLUG, canonical_video, default_source_slug, parse_video, safe_path, source_dir, youtube_cover
+from podhub.storage.paths import (
+    FOLDER_NAME_MAX_BYTES,
+    canonical_video,
+    default_source_slug,
+    folder_name_key,
+    parse_video,
+    safe_path,
+    source_dir,
+    validate_folder_name,
+    youtube_cover,
+)
 from podhub.ytdlp.runner import RunResult, Runner, redact, stop_group
 from podhub.ytdlp.shim import version_parts
 
@@ -40,6 +50,13 @@ DEFAULT_COOKIE_TEST_VIDEO = "dQw4w9WgXcQ"
 
 class NotFound(LookupError):
     pass
+
+
+def _podcast_title(value: str) -> str:
+    title = value.strip()
+    if not title:
+        raise ValueError("podcast title cannot be empty")
+    return title
 
 
 class Services:
@@ -104,20 +121,20 @@ class Services:
         return await self.discovery.preview(value, kind, cookie_id)
 
     def _available_slug(self, conn: sqlite3.Connection, base: str, *, explicit: bool = False) -> str:
-        if len(base) > 255 or not SLUG.fullmatch(base):
-            raise ValueError("folder slug must be at most 255 characters using lowercase letters, numbers and single hyphens")
+        base = validate_folder_name(base)
+        occupied = {folder_name_key(row["slug"]) for row in conn.execute("SELECT slug FROM sources")}
+        occupied.update(folder_name_key(path.name) for path in self.config.paths.output_dir.iterdir())
         slug = base
-        suffix = 2
-        while True:
-            path = self.config.paths.output_dir / slug
-            if not conn.execute("SELECT 1 FROM sources WHERE slug=?", (slug,)).fetchone() and not (
-                path.exists() or path.is_symlink()
-            ):
-                return slug
+        index = 2
+        while folder_name_key(slug) in occupied:
             if explicit:
-                raise ValueError("folder slug is already in use")
-            slug = f"{base}-{suffix}"
-            suffix += 1
+                raise ValueError("folder name is already in use")
+            suffix = f"-{index}"
+            budget = FOLDER_NAME_MAX_BYTES - len(suffix)
+            prefix = base.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" .")
+            slug = f"{prefix}{suffix}"
+            index += 1
+        return slug
 
     def suggest_slug(self, identity: SourceIdentity, original: str) -> str:
         with self.db.connect() as conn:
@@ -125,8 +142,10 @@ class Services:
 
     async def add_source(
         self, identity: SourceIdentity, original: str, policy: SourcePolicy,
-        cookie_id: int | None = None, check_interval_s: int | None = None, *, slug: str | None = None,
+        cookie_id: int | None = None, check_interval_s: int | None = None,
+        *, title: str | None = None, slug: str | None = None,
     ) -> int:
+        display_title = _podcast_title(identity.title if title is None else title)
         interval = check_interval_s or (
             self.config.pacing.playlist_check_interval_s if identity.kind == "playlist"
             else self.config.pacing.default_check_interval_s
@@ -138,13 +157,13 @@ class Services:
                 raise ValueError("cookie profile does not exist")
             if conn.execute("SELECT 1 FROM sources WHERE external_id=?", (identity.external_id,)).fetchone():
                 raise ValueError("source already exists")
-            base = default_source_slug(identity.title, original, identity.external_id) if slug is None else slug
+            base = default_source_slug(display_title, original, identity.external_id) if slug is None else slug
             slug = self._available_slug(conn, base, explicit=slug is not None)
             now = stamp()
             cursor = conn.execute(
                 """INSERT INTO sources(kind,source_input,external_id,url,title,slug,feed_token,policy_json,
                    cookie_profile_id,check_interval_s,next_check_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (identity.kind, original, identity.external_id, identity.normalized_url, identity.title, slug,
+                (identity.kind, original, identity.external_id, identity.normalized_url, display_title, slug,
                  secrets.token_urlsafe(16), policy.model_dump_json(), cookie_id, interval, now, now, now),
             )
             source_id = cursor.lastrowid
@@ -152,6 +171,15 @@ class Services:
         if identity.cover_url:
             await self.fetch_cover(source_id, slug, identity.cover_url)
         return source_id
+
+    def rename_source(self, source_id: int, title: str) -> None:
+        title = _podcast_title(title)
+        with self.db.transaction() as conn:
+            updated = conn.execute(
+                "UPDATE sources SET title=?,updated_at=? WHERE id=?", (title, stamp(), source_id),
+            )
+            if not updated.rowcount:
+                raise NotFound("source does not exist")
 
     async def fetch_cover(self, source_id: int, slug: str, url: str) -> None:
         if not youtube_cover(url):

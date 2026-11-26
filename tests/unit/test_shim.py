@@ -105,7 +105,7 @@ def test_exdev_atomic_copy_leaves_no_stage_file(tmp_path, monkeypatch):
     source = tmp_path / "state" / "audio.m4a"
     source.parent.mkdir()
     source.write_bytes(b"complete audio")
-    target = tmp_path / "podcasts" / "slug" / f"{VIDEO}.m4a"
+    target = tmp_path / "podcasts" / "東京 音訊" / f"{VIDEO}.m4a"
     real_replace = os.replace
 
     def replace(origin, destination):

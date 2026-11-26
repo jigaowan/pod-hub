@@ -217,11 +217,13 @@ async def confirm_source(request: Request) -> Response:
     s: Services = request.app.state.services
     async with checked_form(request) as form:
         payload = read_preview(s, text(form, "ticket"))
+        identity = SourceIdentity(**payload["identity"])
         changes = payload["policy"]
         changes["initial_backfill_count"] = number(form, "initial_backfill_count")
-        sid = await s.add_source(SourceIdentity(**payload["identity"]), payload["original"],
-                                 SourcePolicy.model_validate(changes), payload["cookie"],
-                                 slug=text(form, "slug") or None)
+        sid = await s.add_source(
+            identity, payload["original"], SourcePolicy.model_validate(changes), payload["cookie"],
+            title=text(form, "title", identity.title), slug=text(form, "slug") or None,
+        )
     return redirect(f"/admin/sources/{sid}")
 
 
@@ -248,6 +250,8 @@ async def source_action(request: Request, sid: int) -> Response:
             if interval is None:
                 raise ValueError("enter a check interval")
             s.update_source(sid, form_policy(form, policy_for(source), POLICY_EDIT), cookie_id(form), interval)
+        elif action == "rename":
+            s.rename_source(sid, text(form, "title"))
         elif action == "add-video":
             s.add_video(sid, text(form, "video"))
         elif action == "delete":

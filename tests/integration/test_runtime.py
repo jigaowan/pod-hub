@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from datetime import timedelta
 
@@ -17,6 +18,8 @@ from podhub.domain.models import stamp, utc_now
 from podhub.main import create_app
 from podhub.outputs.rss import ITUNES, PODCAST
 from podhub.postprocess.base import ArtifactResult
+from podhub.storage.media import STAGING_PREFIX, save_cover
+from podhub.storage.paths import validate_folder_name
 from podhub.ytdlp.runner import RunResult
 
 from conftest import OTHER, VIDEO
@@ -33,21 +36,22 @@ async def download_one(services, media):
 
 
 async def test_atomic_publish_hardlink_deletion_and_reconciliation(services, source_factory, sample_media):
-    a, b = await source_factory("Shared Café"), await source_factory("Shared Cafe")
+    a = await source_factory("中文　Cafe\u0301")
+    b = await source_factory("日本語 放送")
     root = services.config.paths.output_dir
     services.add_video(a, VIDEO)
     await download_one(services, sample_media)
-    original = root / "shared-cafe" / f"{VIDEO}.m4a"
+    original = root / "中文 Café" / f"{VIDEO}.m4a"
     assert original.read_bytes() == sample_media.read_bytes()
     assert list(original.parent.iterdir()) == [original]
 
     services.add_video(b, VIDEO)
     services.downloader.link_ready()
-    sibling = root / "shared-cafe-2" / f"{VIDEO}.m4a"
+    sibling = root / "日本語 放送" / f"{VIDEO}.m4a"
     assert original.samefile(sibling)
     assert [mode for mode, _ in services.runner.calls].count("fetch") == 1
     sibling.unlink()
-    orphan = root / "shared-cafe" / f"{OTHER}.m4a"
+    orphan = original.with_name(f"{OTHER}.m4a")
     shutil.copyfile(original, orphan)
     assert reconcile(services.config, services.db) == [str(orphan.relative_to(root))]
     assert original.samefile(sibling)
@@ -60,6 +64,62 @@ async def test_atomic_publish_hardlink_deletion_and_reconciliation(services, sou
     with services.db.connect() as conn:
         assert conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "pending"
         assert conn.execute("SELECT state FROM source_entries WHERE source_id=?", (b,)).fetchone()[0] == "wanted"
+
+
+async def test_generated_folder_suffix_fits_byte_limit(services, source_factory):
+    name = "聲" * 40
+    first = await source_factory(name)
+    second = await source_factory(f"{name}音")
+    assert services.source(first)["slug"] == name
+    slug = services.source(second)["slug"]
+    assert slug == "聲" * 39 + "-2"
+    assert validate_folder_name(slug) == slug
+
+
+async def test_unicode_folder_recovery_cover_and_media_routes(services, source_factory, sample_media):
+    sid = await source_factory("東京 音訊")
+    source = services.source(sid)
+    paths = services.config.paths
+    folder = paths.output_dir / source["slug"]
+    services.add_video(sid, VIDEO)
+    await download_one(services, sample_media)
+    artwork = paths.state_dir / "tmp" / "fixture.jpg"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=32x32",
+        "-frames:v", "1", "--", str(artwork),
+    ], check=True, capture_output=True)
+    cover_bytes = artwork.read_bytes()
+    cover_name = save_cover(artwork, paths.output_dir, source["slug"])
+    with services.db.transaction() as conn:
+        conn.execute("UPDATE sources SET cover_filename=? WHERE id=?", (cover_name, sid))
+
+    artifact_dir = folder / "artifacts"
+    artifact_dir.mkdir()
+    stale_files = [directory / f"{STAGING_PREFIX}stale" for directory in (folder, artifact_dir)]
+    for file in stale_files:
+        file.touch()
+    hidden = paths.output_dir / ".hidden"
+    hidden.mkdir()
+    untouched = hidden / f"{STAGING_PREFIX}stale"
+    untouched.touch()
+    Scheduler(services).recover()
+    assert all(not file.exists() for file in stale_files)
+    assert untouched.is_file()
+    assert not reconcile(services.config, services.db)
+
+    token = source["feed_token"]
+    with TestClient(create_app(services=services, run_scheduler=False)) as client:
+        feed = ET.fromstring(client.get(f"/feeds/{token}.xml").content)
+        assert feed.findtext("channel/title") == "東京 音訊"
+        cover_url = f"/covers/{token}/{cover_name}"
+        image = feed.find(f"channel/{{{ITUNES}}}image")
+        assert image.attrib["href"] == f"{services.config.web.base_url}{cover_url}"
+        cover = client.get(cover_url)
+        assert cover.status_code == 200 and cover.content == cover_bytes
+        media_url = f"/media/{token}/{VIDEO}.m4a"
+        assert feed.find("channel/item/enclosure").attrib["url"] == f"{services.config.web.base_url}{media_url}"
+        media = client.get(media_url, headers={"Range": "bytes=0-15"})
+        assert media.status_code == 206 and media.content == sample_media.read_bytes()[:16]
 
 
 async def test_feed_range_etag_tokens_and_retention(services, source_factory, sample_media):
@@ -165,7 +225,7 @@ class DummyPostProcessor:
 
 
 async def test_postprocess_enqueues_publishes_and_isolates_failure(services, source_factory, sample_media):
-    sid = await source_factory("Queue", postprocess={"dummy": True, "broken": True})
+    sid = await source_factory("日本語 字幕", postprocess={"dummy": True, "broken": True})
     source = services.source(sid)
     services.registry.register(DummyPostProcessor(source["slug"]))
     services.registry.register(DummyPostProcessor(source["slug"], "broken"))

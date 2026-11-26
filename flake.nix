@@ -8,7 +8,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       appDependencies = ps: with ps; [
-        fastapi starlette uvicorn jinja2 python-multipart pydantic httpx
+        fastapi starlette uvicorn jinja2 python-multipart pydantic httpx pathvalidate
       ];
       testDependencies = ps: with ps; [ pytest pytest-asyncio ];
       toolPython = pkgs: package:

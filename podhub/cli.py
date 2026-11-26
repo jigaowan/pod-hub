@@ -36,7 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--kind", choices=list(SourceKind))
     add.add_argument("--cookie-profile-id", type=int)
     add.add_argument("--initial-backfill-count", type=int)
-    add.add_argument("--slug", help="custom source folder slug")
+    add.add_argument("--title", help="custom podcast display title")
+    add.add_argument("--slug", help="custom source folder name")
     sources.add_parser("sync").add_argument("id", type=int)
     add_video = sources.add_parser("add-video")
     add_video.add_argument("id", type=int)
@@ -72,7 +73,8 @@ async def execute(args: argparse.Namespace, services: Services) -> int:
                     validated = SourcePolicy.model_validate(policy)
                     preview = await services.preview(args.source, kind, args.cookie_profile_id)
                     print(await services.add_source(
-                        preview.identity, args.source, validated, args.cookie_profile_id, slug=args.slug,
+                        preview.identity, args.source, validated, args.cookie_profile_id,
+                        title=args.title, slug=args.slug,
                     ))
                 case "sync":
                     services.source_command(args.id, "sync")
