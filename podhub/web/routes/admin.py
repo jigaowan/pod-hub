@@ -94,12 +94,15 @@ MAX_ADMIN_FORM_BYTES = 2_500_000
 @asynccontextmanager
 async def checked_form(request: Request) -> AsyncIterator[FormData]:
     services: Services = request.app.state.services
-    origin = request.headers.get("origin")
-    allowed = {urlsplit(str(request.base_url)).netloc, urlsplit(services.config.web.base_url).netloc}
-    if request.headers.get("sec-fetch-site") == "cross-site" or (
-        origin and (urlsplit(origin).netloc not in allowed or urlsplit(origin).scheme not in ("http", "https"))
-    ):
-        raise HTTPException(403, "cross-origin form submission")
+    fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site:
+        if fetch_site not in ("same-origin", "none"):
+            raise HTTPException(403, "cross-origin form submission")
+    else:
+        origin = request.headers.get("origin")
+        allowed = {urlsplit(str(request.base_url)).netloc, urlsplit(services.config.web.base_url).netloc}
+        if origin and (urlsplit(origin).netloc not in allowed or urlsplit(origin).scheme not in ("http", "https")):
+            raise HTTPException(403, "cross-origin form submission")
     content_length = request.headers.get("content-length")
     if content_length:
         try:

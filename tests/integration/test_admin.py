@@ -58,6 +58,12 @@ def test_admin_source_preview_confirm_and_actions(services):
         assert services.source(sid)["policy_rev"] == 2
         assert client.post(detail, data={"action": "delete"}).status_code == 400
         assert client.post("/admin/system", data={"action": "pause"}, headers={"Origin": "https://elsewhere.example"}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "same-site"}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={
+            "Sec-Fetch-Site": "same-origin", "Origin": "https://temp-proxy.example",
+        }).status_code == 200
+        assert client.post("/admin/system", data={"action": "resume"}, headers={"Origin": "http://testserver"}).status_code == 200
         assert "Paused" in client.post("/admin/system", data={"action": "pause"}).text
         assert "Running" in client.post("/admin/system", data={"action": "resume"}).text
         assert "ffmpeg test" in client.post("/admin/system", data={"action": "doctor"}).text
