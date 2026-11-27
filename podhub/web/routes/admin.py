@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import secrets
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -39,14 +40,13 @@ TABS = {
     "unavailable": ("Unavailable", "v.state='unavailable'"),
     "ready": ("Ready", "v.state='ready'"),
 }
-POLICY_BOOLEAN = ("include_shorts", "include_live_archives")
+POLICY_BOOLEAN = ("fetch_history", "include_shorts", "include_live_archives")
 PREVIEW_FIELDS = (
-    "initial_backfill_count", "min_duration_s", "max_duration_s", "title_include_regex", "title_exclude_regex",
+    "min_duration_s", "max_duration_s", "title_include_regex", "title_exclude_regex",
     *POLICY_BOOLEAN,
 )
 POLICY_EDIT = (
-    *PREVIEW_FIELDS, "keep_count", "keep_days", "unpublish_grace_hours", "max_feed_items", "feed_order",
-    "playlist_scan_mode", "max_scan_items", "early_stop_known", "audio_format",
+    *PREVIEW_FIELDS, "keep_count", "keep_days", "feed_order",
 )
 
 
@@ -55,6 +55,13 @@ def text(form: FormData, name: str, default: str = "") -> str:
     if not isinstance(value, str):
         raise ValueError(f"{name} must contain text")
     return value
+
+
+def decimal(form: FormData, name: str) -> float:
+    value = text(form, name).strip()
+    if not value:
+        raise ValueError(f"{name} is required")
+    return float(value)
 
 
 def number(form: FormData, name: str) -> int | None:
@@ -72,12 +79,27 @@ def form_policy(form: FormData, default: SourcePolicy, fields: tuple[str, ...]) 
     return SourcePolicy.model_validate(values)
 
 
+CSRF_COOKIE = "podhub_csrf"
+
+
+def csrf_token_for(request: Request) -> tuple[str, bool]:
+    existing = request.cookies.get(CSRF_COOKIE, "")
+    if len(existing) >= 32 and existing.isascii():
+        return existing, False
+    return secrets.token_urlsafe(32), True
+
+
 def render(request: Request, filename: str, status_code: int = 200, **context: Any) -> Response:
     services: Services = request.app.state.services
-    return templates.TemplateResponse(
-        request, filename, {"base_url": services.config.web.base_url, "app_version": app_version(), **context},
+    token, set_cookie = csrf_token_for(request)
+    response = templates.TemplateResponse(
+        request, filename,
+        {"base_url": services.config.web.base_url, "app_version": app_version(), "csrf_token": token, **context},
         headers=HEADERS, status_code=status_code,
     )
+    if set_cookie:
+        response.set_cookie(CSRF_COOKIE, token, path="/", httponly=True, samesite="lax")
+    return response
 
 
 def redirect(location: str) -> Response:
@@ -94,7 +116,7 @@ MAX_ADMIN_FORM_BYTES = 2_500_000
 @asynccontextmanager
 async def checked_form(request: Request) -> AsyncIterator[FormData]:
     fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
-    if fetch_site == "cross-site":
+    if fetch_site in ("cross-site", "same-site"):
         raise HTTPException(403, "cross-origin form submission")
     content_length = request.headers.get("content-length")
     if content_length:
@@ -112,6 +134,10 @@ async def checked_form(request: Request) -> AsyncIterator[FormData]:
         chunks.append(chunk)
     request._body = b"".join(chunks)
     async with request.form(max_fields=50, max_files=0, max_part_size=2_000_000) as form:
+        cookie_token = request.cookies.get(CSRF_COOKIE, "")
+        submitted = request.headers.get("x-csrf-token") or text(form, "csrf_token")
+        if not cookie_token or not submitted or not hmac.compare_digest(cookie_token, submitted):
+            raise HTTPException(403, "cross-origin or missing CSRF token; refresh the page and try again")
         yield form
 
 
@@ -233,7 +259,7 @@ async def confirm_source(request: Request) -> Response:
         payload = read_preview(s, text(form, "ticket"))
         identity = SourceIdentity(**payload["identity"])
         changes = payload["policy"]
-        changes["initial_backfill_count"] = number(form, "initial_backfill_count")
+        changes["fetch_history"] = text(form, "fetch_history") == "on"
         sid = await s.add_source(
             identity, payload["original"], SourcePolicy.model_validate(changes), payload["cookie"],
             title=text(form, "title", identity.title), slug=text(form, "slug") or None,
@@ -260,10 +286,10 @@ async def source_action(request: Request, sid: int) -> Response:
         action = text(form, "action")
         if action == "policy":
             source = s.source(sid)
-            interval = number(form, "check_interval")
-            if interval is None:
-                raise ValueError("enter a check interval")
-            s.update_source(sid, form_policy(form, policy_for(source), POLICY_EDIT), cookie_id(form), interval)
+            s.update_source(
+                sid, form_policy(form, policy_for(source), POLICY_EDIT),
+                cookie_id(form), number(form, "check_interval"),
+            )
         elif action == "rename":
             s.rename_source(sid, text(form, "title"))
         elif action == "add-video":
@@ -275,7 +301,7 @@ async def source_action(request: Request, sid: int) -> Response:
             s.delete_source(sid, delete_files=selection == "delete")
             return redirect("/admin/sources")
         else:
-            s.source_command(sid, action, count=number(form, "count") or 0)
+            s.source_command(sid, action)
         if text(form, "from_list") == "yes":
             return redirect("/admin/sources")
     return redirect(f"/admin/sources/{sid}")
@@ -299,18 +325,37 @@ def videos_page(request: Request, status: str = "active", page: int = Query(1, g
             f"""SELECT v.* FROM videos v WHERE {TABS[status][1]}
                 AND (v.state!='pending' OR EXISTS (SELECT 1 FROM source_entries e
                 WHERE e.video_id=v.video_id AND e.state='wanted'))
-                ORDER BY v.priority DESC,v.updated_at DESC,v.video_id LIMIT 101 OFFSET ?""",
+                ORDER BY v.priority DESC, v.published_at IS NULL, v.published_at DESC,
+                         v.updated_at DESC, v.video_id LIMIT 101 OFFSET ?""",
             ((page - 1) * 100,),
         ).fetchall()
-    return render(request, "videos.html", title="Videos & Queue", nav="videos", rows=rows[:100],
-                  tabs=TABS, status=status, page=page, more=len(rows) > 100, categories=list(Category))
+        has_pacing_override = bool(get_meta(conn, "pacing_overrides"))
+    return render(
+        request, "videos.html", title="Videos & Queue", nav="videos", rows=rows[:100],
+        tabs=TABS, status=status, page=page, more=len(rows) > 100, categories=list(Category),
+        pacing=s.effective_pacing(), pacing_stats=s.pacing_stats(), has_pacing_override=has_pacing_override,
+    )
 
 
 @router.post("/videos")
-async def retry_videos(request: Request) -> Response:
+async def videos_action(request: Request) -> Response:
     s: Services = request.app.state.services
     async with checked_form(request) as form:
-        s.retry(category=text(form, "category"))
+        action = text(form, "action")
+        if action == "pacing":
+            s.update_pacing({
+                "max_concurrent_downloads": number(form, "max_concurrent_downloads"),
+                "min_launch_gap_s": decimal(form, "min_launch_gap_s"),
+                "launch_jitter_s": decimal(form, "launch_jitter_s"),
+                "backfill_min_gap_s": decimal(form, "backfill_min_gap_s"),
+                "backfill_jitter_s": decimal(form, "backfill_jitter_s"),
+                "backfill_daily_cap": number(form, "backfill_daily_cap"),
+                "daily_download_cap": number(form, "daily_download_cap"),
+            })
+        elif action == "reset-pacing":
+            s.reset_pacing()
+        else:
+            s.retry(category=text(form, "category"))
     return redirect("/admin/videos")
 
 
@@ -342,7 +387,7 @@ async def video_action(request: Request, vid: str) -> Response:
 def cookies_page(request: Request, validated: str = "") -> Response:
     s: Services = request.app.state.services
     return render(request, "cookies.html", title="Cookies & Config", nav="cookies", rows=s.cookies(),
-                  config=json.dumps(s.config.redacted(), indent=2), validated=validated)
+                  config=json.dumps(s.effective_config_redacted(), indent=2), validated=validated)
 
 
 @router.post("/cookies")

@@ -12,7 +12,7 @@ class SettingsModel(BaseModel):
 
 class SourcePolicy(SettingsModel):
     audio_format: str = Field(default="bestaudio[ext=m4a]/bestaudio/best", min_length=1)
-    initial_backfill_count: int = Field(default=3, ge=0)
+    fetch_history: bool = False
     include_shorts: bool = False
     include_live_archives: bool = True
     min_duration_s: int = Field(default=60, ge=0)

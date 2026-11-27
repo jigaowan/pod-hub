@@ -30,6 +30,8 @@ class Scheduler:
         self.tasks: dict[str, set[asyncio.Task[None]]] = {}
         self.active_downloads: dict[asyncio.Task[None], tuple[str, int]] = {}
         self.launch_after = 0.0
+        self.backfill_after = 0.0
+        self.pacing_rev = ""
 
     def recover(self) -> None:
         services = self.services
@@ -132,19 +134,33 @@ class Scheduler:
                 await services.notifier.send([event])
             return
         services.downloader.link_ready()
+        pacing = services.effective_pacing()
         with services.db.transaction() as conn:
             if get_meta(conn, "global_paused") == "1" or not services.breakers.allowed(conn, NETWORK_GATES):
                 return
+            pacing_rev = get_meta(conn, "pacing_rev")
+            if pacing_rev != self.pacing_rev:
+                self.pacing_rev = pacing_rev
+                self.launch_after = 0.0
+                self.backfill_after = 0.0
             # Give the half-open attempt to the download queue first.
-            if (len(self.tasks.get("download", ())) < config.pacing.max_concurrent_downloads
-                    and monotonic() >= self.launch_after and self.below_cap(conn)):
-                claimed = claim_video(conn, stamp(now))
+            if (len(self.tasks.get("download", ())) < pacing.max_concurrent_downloads
+                    and monotonic() >= self.launch_after and self.below_cap(conn, pacing.daily_download_cap)):
+                allow_history = (
+                    monotonic() >= self.backfill_after
+                    and self.below_backfill_cap(conn, pacing.backfill_daily_cap)
+                )
+                claimed = claim_video(conn, stamp(now), min_priority=0 if allow_history else 20)
                 if claimed:
                     video, sid = claimed
+                    is_backfill = video["priority"] <= 10
                     cookie = conn.execute("SELECT cookie_profile_id FROM sources WHERE id=?", (sid,)).fetchone()[0]
-                    attempt = start_attempt(conn, "download", sid, video["video_id"], cookie)
+                    attempt = start_attempt(conn, "download", sid, video["video_id"], cookie, is_backfill=is_backfill)
                     services.breakers.reserve(conn, NETWORK_GATES, attempt)
-                    self.launch_after = monotonic() + config.pacing.min_launch_gap_s + random.uniform(0, config.pacing.launch_jitter_s)
+                    now_mono = monotonic()
+                    self.launch_after = now_mono + pacing.min_launch_gap_s + random.uniform(0, pacing.launch_jitter_s)
+                    if is_backfill:
+                        self.backfill_after = now_mono + pacing.backfill_min_gap_s + random.uniform(0, pacing.backfill_jitter_s)
                 else:
                     attempt = None
             else:
@@ -172,12 +188,22 @@ class Scheduler:
             if not task.cancelling():
                 task.cancel()
 
-    def below_cap(self, conn: sqlite3.Connection) -> bool:
-        limit = self.services.config.pacing.daily_download_cap
+    def below_cap(self, conn: sqlite3.Connection, limit: int) -> bool:
         if not limit:
             return True
         count = conn.execute(
             "SELECT count(*) FROM attempts WHERE kind='download' AND outcome IN ('ok','running','error','deferred') AND started_at>=?",
+            (utc_day(),),
+        ).fetchone()[0]
+        return count < limit
+
+    def below_backfill_cap(self, conn: sqlite3.Connection, limit: int) -> bool:
+        if not limit:
+            return True
+        count = conn.execute(
+            """SELECT count(*) FROM attempts
+               WHERE kind='download' AND is_backfill=1
+                 AND outcome IN ('ok','running','error','deferred') AND started_at>=?""",
             (utc_day(),),
         ).fetchone()[0]
         return count < limit

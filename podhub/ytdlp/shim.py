@@ -484,10 +484,7 @@ def run(request: dict[str, Any]) -> int:
                 }
         if listing:
             extractor_args.setdefault("youtubetab", {}).setdefault("approximate_date", [""])
-            start = max(1, int(request.get("start") or 1))
-            limit = request.get("limit")
-            playlistend = (start + int(limit) - 1) if limit else None
-            params.update(extract_flat="in_playlist", lazy_playlist=True, playliststart=start, playlistend=playlistend)
+            params.update(extract_flat="in_playlist", lazy_playlist=True)
         if request["mode"] == "resolve":
             params["playlist_items"] = "0"
         params["extractor_args"] = extractor_args
@@ -523,10 +520,15 @@ def run(request: dict[str, Any]) -> int:
                 return 0
             if request["mode"] == "list":
                 start = max(1, int(request.get("start") or 1))
-                for index, entry in enumerate(flat_entries(raw), 1):
-                    if request.get("limit") and index > request["limit"]:
+                limit = int(request["limit"]) if request.get("limit") else None
+                emitted = 0
+                for position, entry in enumerate(flat_entries(raw), 1):
+                    if position < start:
+                        continue
+                    emitted += 1
+                    if limit is not None and emitted > limit:
                         break
-                    emit("entry", **picked(entry), sort_key=start + index - 1)
+                    emit("entry", **picked(entry), sort_key=position)
                 return 0
             info = picked(raw)
             info["formats_count"] = len(raw.get("formats") or [])

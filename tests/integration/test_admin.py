@@ -16,6 +16,12 @@ from podhub.ytdlp.runner import RunResult
 from conftest import CHANNEL, COOKIES, OTHER, THIRD, VIDEO
 
 
+def csrf_headers(client: TestClient) -> dict[str, str]:
+    page = client.get("/admin")
+    token = re.search(r'<meta name="csrf-token" content="([^"]+)"', page.text)[1]
+    return {"X-CSRF-Token": token}
+
+
 def test_admin_source_preview_confirm_and_actions(services):
     services.runner.entries = [
         {"id": VIDEO, "title": "Included long episode", "duration": 100},
@@ -25,21 +31,22 @@ def test_admin_source_preview_confirm_and_actions(services):
         overview_html = client.get("/admin").text
         assert "Recent attempts" in overview_html
         assert 'class="version"' in overview_html
+        csrf = {"X-CSRF-Token": re.search(r'<meta name="csrf-token" content="([^"]+)"', overview_html)[1]}
         assert "overview-panel" in client.get("/admin/status").text
         assert client.get("/healthz").text == "ok\n"
         assert "2.0.8" in client.get("/static/htmx.min.js").text
         assert client.get("/admin/sources").status_code == 200
         response = client.post("/admin/sources/preview", data={
             "source_input": "@example", "min_duration_s": "60",
-        }, headers={"HX-Request": "true"})
+        }, headers={"HX-Request": "true", **csrf})
         assert response.status_code == 200
         assert CHANNEL in response.text and "Included long episode" in response.text
         assert "Filtered · Below minimum duration" in response.text
         assert 'name="title" value="Example Channel"' in response.text
         assert 'name="slug" value="Example Channel"' in response.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', response.text)[1]
-        assert client.post("/admin/sources", data={"ticket": f"{ticket}a", "initial_backfill_count": 1}).status_code == 400
-        confirm = client.post("/admin/sources", data={"ticket": ticket, "initial_backfill_count": 1}, follow_redirects=False)
+        assert client.post("/admin/sources", data={"ticket": f"{ticket}a"}, headers=csrf).status_code == 400
+        confirm = client.post("/admin/sources", data={"ticket": ticket, "fetch_history": "on"}, headers=csrf, follow_redirects=False)
         assert confirm.status_code == 303
         detail = confirm.headers["location"]
         panel = client.get(detail)
@@ -48,26 +55,32 @@ def test_admin_source_preview_confirm_and_actions(services):
         sid = int(detail.rsplit("/", 1)[1])
         assert services.source(sid)["external_id"] == CHANNEL
         previous = services.source(sid)["feed_token"]
-        assert client.post(detail, data={"action": "rotate"}).status_code == 200
+        assert client.post(detail, data={"action": "rotate"}, headers=csrf).status_code == 200
         assert services.source(sid)["feed_token"] != previous
-        assert client.post(detail, data={"action": "sync"}).status_code == 200
-        assert client.post(detail, data={"action": "pause"}).status_code == 200
+        assert client.post(detail, data={"action": "sync"}, headers=csrf).status_code == 200
+        assert client.post(detail, data={"action": "pause"}, headers=csrf).status_code == 200
         assert services.source(sid)["enabled"] == 0
-        assert client.post(detail, data={"action": "resume"}).status_code == 200
-        assert client.post(detail, data={"action": "add-video", "video": f"https://youtu.be/{VIDEO}"}).status_code == 200
-        assert client.post(f"{detail}/episodes/{VIDEO}", data={"action": "pin"}).status_code == 200
-        assert client.post(detail, data={"action": "policy", "check_interval": 60, "keep_count": 10}).status_code == 200
+        assert client.post(detail, data={"action": "resume"}, headers=csrf).status_code == 200
+        assert client.post(detail, data={"action": "add-video", "video": f"https://youtu.be/{VIDEO}"}, headers=csrf).status_code == 200
+        assert client.post(f"{detail}/episodes/{VIDEO}", data={"action": "pin"}, headers=csrf).status_code == 200
+        assert client.post(detail, data={"action": "policy", "keep_count": 10}, headers=csrf).status_code == 200
         assert services.source(sid)["policy_rev"] == 2
-        assert client.post(detail, data={"action": "delete"}).status_code == 400
-        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+        assert client.post(detail, data={"action": "delete"}, headers=csrf).status_code == 400
+        # CSRF blocks missing/wrong token, cross-site, and same-site, while allowing valid token on any temporary proxy/IP Origin.
+        assert client.post("/admin/system", data={"action": "pause"}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={"X-CSRF-Token": "wrong"}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "cross-site", **csrf}).status_code == 403
+        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "same-site", **csrf}).status_code == 403
         assert client.post("/admin/system", data={"action": "pause"}, headers={
-            "Sec-Fetch-Site": "same-origin", "Origin": "https://temp-proxy.example",
+            "Sec-Fetch-Site": "same-origin", "Origin": "https://temp-proxy.example", **csrf,
         }).status_code == 200
-        assert client.post("/admin/system", data={"action": "resume"}, headers={"Origin": "http://192.168.1.10:9000"}).status_code == 200
-        assert "Paused" in client.post("/admin/system", data={"action": "pause"}).text
-        assert "Running" in client.post("/admin/system", data={"action": "resume"}).text
-        assert "ffmpeg test" in client.post("/admin/system", data={"action": "doctor"}).text
-        assert client.post(detail, data={"action": "delete", "files": "keep"}).status_code == 200
+        assert client.post("/admin/system", data={"action": "resume", "csrf_token": csrf["X-CSRF-Token"]}, headers={
+            "Origin": "http://192.168.1.10:9000",
+        }).status_code == 200
+        assert "Paused" in client.post("/admin/system", data={"action": "pause"}, headers=csrf).text
+        assert "Running" in client.post("/admin/system", data={"action": "resume"}, headers=csrf).text
+        assert "ffmpeg test" in client.post("/admin/system", data={"action": "doctor"}, headers=csrf).text
+        assert client.post(detail, data={"action": "delete", "files": "keep"}, headers=csrf).status_code == 200
         assert client.get(detail).status_code == 404
 
 
@@ -77,16 +90,17 @@ def test_admin_slug_override_rejects_invalid_and_conflicting_folders(services):
     (root / "Cafe\u0301 音楽").mkdir()
     (root / "dangling").symlink_to(root / "missing")
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
-        preview = client.post("/admin/sources/preview", data={"source_input": "@example"})
+        csrf = csrf_headers(client)
+        preview = client.post("/admin/sources/preview", data={"source_input": "@example"}, headers=csrf)
         assert 'name="slug" value="Example Channel-2"' in preview.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', preview.text)[1]
-        form = {"ticket": ticket, "initial_backfill_count": 1}
+        form = {"ticket": ticket}
         for slug in ("../escape", ".hidden", "a" * 121, "番" * 41, "Example Channel", "Café 音楽", "dangling", "NUL"):
-            assert client.post("/admin/sources", data={**form, "slug": slug}).status_code == 400
+            assert client.post("/admin/sources", data={**form, "slug": slug}, headers=csrf).status_code == 400
         assert not services.sources()
         confirmed = client.post("/admin/sources", data={
             **form, "title": " 深夜ラジオ ", "slug": "  か\u3099く　档案 ",
-        }, follow_redirects=False)
+        }, headers=csrf, follow_redirects=False)
         assert confirmed.status_code == 303
         source = services.sources()[0]
         assert (source["title"], source["slug"]) == ("深夜ラジオ", "がく 档案")
@@ -94,13 +108,14 @@ def test_admin_slug_override_rejects_invalid_and_conflicting_folders(services):
 
 def test_admin_title_controls_default_folder_and_can_be_renamed(services):
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
-        preview = client.post("/admin/sources/preview", data={"source_input": "初期設定", "kind": "manual"})
+        csrf = csrf_headers(client)
+        preview = client.post("/admin/sources/preview", data={"source_input": "初期設定", "kind": "manual"}, headers=csrf)
         assert 'name="title" value="初期設定"' in preview.text
         assert 'name="slug" value="初期設定"' in preview.text
         ticket = re.search(r'name="ticket" value="([^"]+)"', preview.text)[1]
-        form = {"ticket": ticket, "initial_backfill_count": 1, "slug": ""}
-        assert client.post("/admin/sources", data={**form, "title": "  "}).status_code == 400
-        confirmed = client.post("/admin/sources", data={**form, "title": "今日：中文节目"}, follow_redirects=False)
+        form = {"ticket": ticket, "slug": ""}
+        assert client.post("/admin/sources", data={**form, "title": "  "}, headers=csrf).status_code == 400
+        confirmed = client.post("/admin/sources", data={**form, "title": "今日：中文节目"}, headers=csrf, follow_redirects=False)
         assert confirmed.status_code == 303
         source = services.sources()[0]
         assert source["slug"] == "今日：中文节目"
@@ -112,8 +127,8 @@ def test_admin_title_controls_default_folder_and_can_be_renamed(services):
         feed = client.get(feed_url)
         assert ET.fromstring(feed.content).findtext("channel/title") == "今日：中文节目"
         assert 'name="title" value="今日：中文节目"' in client.get(detail).text
-        assert client.post(detail, data={"action": "rename", "title": "   "}).status_code == 400
-        updated = client.post(detail, data={"action": "rename", "title": " 新しい名前 "})
+        assert client.post(detail, data={"action": "rename", "title": "   "}, headers=csrf).status_code == 400
+        updated = client.post(detail, data={"action": "rename", "title": " 新しい名前 "}, headers=csrf)
         assert updated.status_code == 200 and "新しい名前" in updated.text
         updated_source = services.source(source["id"])
         assert updated_source["slug"] == source["slug"]
@@ -133,12 +148,19 @@ async def test_admin_queue_status_bulk_retry_and_video_timeline(services, source
         conn.execute("UPDATE videos SET state='failed',last_category='unclassified',unclassified=1 WHERE video_id=?", (VIDEO,))
         conn.execute("UPDATE videos SET state='failed',last_category='corrupted_artifact' WHERE video_id=?", (OTHER,))
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
+        csrf = csrf_headers(client)
         for tab in ("active", "deferred", "failed", "unclassified", "unavailable", "ready"):
             assert client.get(f"/admin/videos?status={tab}").status_code == 200
         found = client.get("/admin/videos?status=unclassified").text
         assert VIDEO in found and OTHER not in found
         assert "Attempt timeline" in client.get(f"/admin/videos/{VIDEO}").text
-        assert client.post("/admin/videos", data={"category": "unclassified"}).status_code == 200
+        assert client.post("/admin/videos", data={"action": "pacing", "max_concurrent_downloads": "2", "min_launch_gap_s": "10", "launch_jitter_s": "15", "backfill_min_gap_s": "45", "backfill_jitter_s": "30", "backfill_daily_cap": "12", "daily_download_cap": "50"}, headers=csrf).status_code == 200
+        assert services.effective_pacing().backfill_daily_cap == 12
+        assert services.effective_pacing().max_concurrent_downloads == 2
+        assert "&#34;backfill_daily_cap&#34;: 12" in client.get("/admin/cookies").text
+        assert client.post("/admin/videos", data={"action": "reset-pacing"}, headers=csrf).status_code == 200
+        assert services.effective_pacing().backfill_daily_cap == services.config.pacing.backfill_daily_cap
+        assert client.post("/admin/videos", data={"action": "retry", "category": "unclassified"}, headers=csrf).status_code == 200
         with services.db.connect() as conn:
             assert conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "pending"
             assert conn.execute("SELECT state FROM videos WHERE video_id=?", (OTHER,)).fetchone()[0] == "failed"
@@ -149,7 +171,8 @@ async def test_cookies_create_update_expire_validate_and_delete(services, source
     bound = await source_factory("Bound source")
     unbound = await source_factory("Unbound source")
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
-        create = client.post("/admin/cookies", data={"action": "save", "name": "Login", "contents": COOKIES})
+        csrf = csrf_headers(client)
+        create = client.post("/admin/cookies", data={"action": "save", "name": "Login", "contents": COOKIES}, headers=csrf)
         assert create.status_code == 200
         assert "sample-cookie-secret" not in create.text
         assert "Effective configuration" in create.text
@@ -166,10 +189,10 @@ async def test_cookies_create_update_expire_validate_and_delete(services, source
         assert services.cookies()[0]["status"] == "expired"
         assert client.post("/admin/cookies", data={
             "action": "save", "id": cookie_id, "name": "New login", "contents": COOKIES,
-        }).status_code == 200
+        }, headers=csrf).status_code == 200
         with services.db.connect() as conn:
             assert conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()[0] == "unavailable"
-        response = client.post("/admin/cookies", data={"action": "validate", "id": cookie_id, "video": VIDEO})
+        response = client.post("/admin/cookies", data={"action": "validate", "id": cookie_id, "video": VIDEO}, headers=csrf)
         assert response.status_code == 200 and "Cookie validated." in response.text
         assert services.cookies()[0]["status"] == "active"
         assert services.list_breakers()[-1]["state"] == "closed"
@@ -177,7 +200,7 @@ async def test_cookies_create_update_expire_validate_and_delete(services, source
             assert dict(conn.execute("SELECT video_id,state FROM videos")) == {
                 VIDEO: "pending", OTHER: "unavailable", THIRD: "unavailable",
             }
-        assert client.post("/admin/cookies", data={"action": "delete", "id": cookie_id}).status_code == 200
+        assert client.post("/admin/cookies", data={"action": "delete", "id": cookie_id}, headers=csrf).status_code == 200
         assert not services.cookies()
         assert not (services.config.paths.state_dir / "cookies" / f"{cookie_id}.txt").exists()
 

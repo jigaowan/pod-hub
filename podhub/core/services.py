@@ -14,14 +14,14 @@ from uuid import uuid4
 
 import httpx
 
-from podhub.config import Config
+from podhub.config import Config, Pacing
 from podhub.core.attempts import finish_attempt, interrupt_attempt
 from podhub.core.discovery import Discovery, NETWORK_GATES, Preview, SourceError, cookie_for
 from podhub.core.downloader import Downloader
 from podhub.core.notifications import Notifier
 from podhub.core.retention import purge_unlinked
 from podhub.db.connection import Database, get_meta, set_meta
-from podhub.db.repositories import activate_video, policy_for, start_attempt, upsert_video
+from podhub.db.repositories import activate_video, policy_for, start_attempt, upsert_video, utc_day
 from podhub.domain.enums import Category, SourceKind
 from podhub.domain.models import SourceIdentity, stamp
 from podhub.domain.policy import SourcePolicy
@@ -46,6 +46,9 @@ from podhub.ytdlp.runner import RunResult, Runner, redact, stop_group
 from podhub.ytdlp.shim import version_parts
 
 DEFAULT_COOKIE_TEST_VIDEO = "dQw4w9WgXcQ"
+
+
+ADMIN_SKIP_REASON = "Skipped by administrator"
 
 
 class NotFound(LookupError):
@@ -216,9 +219,9 @@ class Services:
             return
 
     def update_source(
-        self, source_id: int, policy: SourcePolicy, cookie_id: int | None, check_interval: int,
+        self, source_id: int, policy: SourcePolicy, cookie_id: int | None, check_interval: int | None = None,
     ) -> None:
-        if check_interval < 1:
+        if check_interval is not None and check_interval < 1:
             raise ValueError("check interval must be positive")
         with self.db.transaction() as conn:
             cookie = cookie_for(conn, cookie_id)
@@ -227,12 +230,19 @@ class Services:
             source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
             if not source:
                 raise NotFound("source does not exist")
-            revised = policy != policy_for(source)
+            previous = policy_for(source)
+            revised = policy != previous
             rev = source["policy_rev"] + int(revised)
+            effective_interval = source["check_interval_s"] if check_interval is None else check_interval
+            now = stamp()
             conn.execute(
                 """UPDATE sources SET policy_json=?,policy_rev=?,cookie_profile_id=?,
                    check_interval_s=?,updated_at=? WHERE id=?""",
-                (policy.model_dump_json(), rev, cookie_id, check_interval, stamp(), source_id),
+                (policy.model_dump_json(), rev, cookie_id, effective_interval, now, source_id),
+            )
+            active_cookie = bool(
+                cookie and cookie["status"] in ("active", "suspect")
+                and self.breakers.allowed(conn, (f"cookie:{cookie_id}",))
             )
             if cookie and cookie["id"] != source["cookie_profile_id"] and cookie["status"] == "active" and (
                 self.breakers.allowed(conn, (f"cookie:{cookie_id}",))
@@ -242,15 +252,50 @@ class Services:
                 return
             for row in conn.execute(
                 """SELECT v.meta_json,e.video_id FROM source_entries e JOIN videos v USING(video_id)
-                   WHERE source_id=? AND e.state IN ('filtered','candidate')""", (source_id,),
+                   WHERE source_id=? AND e.state IN ('filtered','candidate')
+                     AND coalesce(e.filter_reason,'')!=?""",
+                (source_id, ADMIN_SKIP_REASON),
             ).fetchall():
                 reason = policy.rejection(json.loads(row["meta_json"] or "{}"))
+                if reason:
+                    state = "filtered"
+                elif policy.fetch_history:
+                    state = "wanted"
+                else:
+                    state = "candidate"
                 conn.execute(
                     """UPDATE source_entries SET state=?,filter_reason=?,evaluated_rev=? WHERE source_id=? AND video_id=?""",
-                    ("filtered" if reason else "candidate", reason, rev, source_id, row["video_id"]),
+                    (state, reason, rev, source_id, row["video_id"]),
+                )
+                if state == "wanted":
+                    activate_video(conn, self.config, row["video_id"], 10, allow_auth_recovery=active_cookie)
+            if policy.fetch_history and not previous.fetch_history and source["kind"] != "manual":
+                next_gen = str(int(get_meta(conn, f"history_gen:{source_id}") or "0") + 1)
+                set_meta(conn, f"history_gen:{source_id}", next_gen)
+                set_meta(conn, f"history_scan:{source_id}", "1")
+                conn.execute("DELETE FROM meta WHERE key=?", (f"history_cursor:{source_id}",))
+                conn.execute("UPDATE sources SET next_check_at=? WHERE id=?", (now, source_id))
+            elif not policy.fetch_history and previous.fetch_history:
+                next_gen = str(int(get_meta(conn, f"history_gen:{source_id}") or "0") + 1)
+                set_meta(conn, f"history_gen:{source_id}", next_gen)
+                conn.execute(
+                    "DELETE FROM meta WHERE key IN (?,?)",
+                    (f"history_scan:{source_id}", f"history_cursor:{source_id}"),
+                )
+                conn.execute(
+                    """UPDATE source_entries SET state='candidate',evaluated_rev=?
+                       WHERE source_id=? AND state='wanted' AND is_history=1 AND pinned=0
+                         AND video_id NOT IN (SELECT video_id FROM videos WHERE state IN ('running','ready'))""",
+                    (rev, source_id),
+                )
+                conn.execute(
+                    """UPDATE videos SET give_up_at=NULL, updated_at=?
+                       WHERE state='pending' AND attempt_count=0 AND last_category IS NULL
+                         AND NOT EXISTS (SELECT 1 FROM source_entries e WHERE e.video_id=videos.video_id AND e.state='wanted')""",
+                    (now,),
                 )
 
-    def source_command(self, source_id: int, action: str, *, count: int = 0) -> None:
+    def source_command(self, source_id: int, action: str) -> None:
         with self.db.transaction() as conn:
             source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
             if not source:
@@ -261,22 +306,6 @@ class Services:
                 conn.execute("UPDATE sources SET enabled=?,updated_at=? WHERE id=?", (int(action == "resume"), stamp(), source_id))
             elif action == "rotate":
                 conn.execute("UPDATE sources SET feed_token=?,updated_at=? WHERE id=?", (secrets.token_urlsafe(16), stamp(), source_id))
-            elif action == "backfill":
-                if count < 1:
-                    raise ValueError("backfill count must be positive")
-                rows = conn.execute(
-                    """SELECT e.video_id FROM source_entries e JOIN videos v USING(video_id)
-                       WHERE source_id=? AND e.state='candidate'
-                       ORDER BY v.published_at IS NULL, v.published_at,
-                                CASE WHEN ?!='manual' THEN e.sort_key END DESC, e.discovered_at,e.video_id LIMIT ?""",
-                    (source_id, source["kind"], count),
-                ).fetchall()
-                for row in rows:
-                    self.want(conn, source_id, row["video_id"], 10)
-                remaining = count - len(rows)
-                if remaining > 0 and source["kind"] != "manual":
-                    set_meta(conn, f"force_deep:{source_id}", str(remaining))
-                    conn.execute("UPDATE sources SET next_check_at=? WHERE id=?", (stamp(), source_id))
             else:
                 raise ValueError("invalid source action")
 
@@ -291,16 +320,18 @@ class Services:
                 if folder.is_dir():
                     shutil.rmtree(folder)
             conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
-            conn.execute("DELETE FROM meta WHERE key IN (?,?,?,?)",
-                         (f"last_deep:{source_id}", f"force_deep:{source_id}",
+            conn.execute("DELETE FROM meta WHERE key IN (?,?,?,?,?,?,?)",
+                         (f"last_deep:{source_id}", f"history_gen:{source_id}", f"history_scan:{source_id}",
+                          f"history_cursor:{source_id}", f"force_deep:{source_id}",
                           f"backfill_cursor:{source_id}", f"atom_variant:{source_id}"))
             purge_unlinked(conn, self.config)
 
     def want(self, conn: sqlite3.Connection, sid: int, vid: str, priority: int, *, manual: bool = False) -> None:
         from_state = "('candidate','filtered','wanted')" if manual else "('candidate','wanted')"
         changed = conn.execute(
-            f"""UPDATE source_entries SET state='wanted',filter_reason=NULL
-                WHERE source_id=? AND video_id=? AND state IN {from_state}""", (sid, vid),
+            f"""UPDATE source_entries SET state='wanted',filter_reason=NULL,
+                is_history=CASE WHEN ? THEN 0 ELSE is_history END
+                WHERE source_id=? AND video_id=? AND state IN {from_state}""", (int(manual), sid, vid),
         ).rowcount
         if changed:
             activate_video(conn, self.config, vid, priority, retry=manual)
@@ -494,6 +525,53 @@ class Services:
                 )
         await self.notifier.send(events)
         return valid
+
+    def effective_pacing(self) -> Pacing:
+        with self.db.connect() as conn:
+            raw = get_meta(conn, "pacing_overrides")
+        if not raw:
+            return self.config.pacing
+        overrides = json.loads(raw)
+        return Pacing.model_validate({**self.config.pacing.model_dump(), **overrides})
+
+    def update_pacing(self, values: dict[str, Any]) -> Pacing:
+        allowed = {
+            "max_concurrent_downloads", "min_launch_gap_s", "launch_jitter_s",
+            "backfill_min_gap_s", "backfill_jitter_s", "backfill_daily_cap", "daily_download_cap",
+        }
+        patch = {k: v for k, v in values.items() if k in allowed}
+        validated = Pacing.model_validate({**self.effective_pacing().model_dump(), **patch})
+        with self.db.transaction() as conn:
+            set_meta(conn, "pacing_overrides", json.dumps({k: getattr(validated, k) for k in allowed}))
+            set_meta(conn, "pacing_rev", str(int(get_meta(conn, "pacing_rev") or "0") + 1))
+        return validated
+
+    def reset_pacing(self) -> Pacing:
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM meta WHERE key='pacing_overrides'")
+            set_meta(conn, "pacing_rev", str(int(get_meta(conn, "pacing_rev") or "0") + 1))
+        return self.config.pacing
+
+    def effective_config_redacted(self) -> dict[str, Any]:
+        data = self.config.redacted()
+        data["pacing"] = self.effective_pacing().model_dump(mode="json")
+        return data
+
+    def pacing_stats(self) -> dict[str, int]:
+        day = utc_day()
+        with self.db.connect() as conn:
+            total = conn.execute(
+                """SELECT count(*) FROM attempts
+                   WHERE kind='download' AND outcome IN ('ok','running','error','deferred') AND started_at>=?""",
+                (day,),
+            ).fetchone()[0]
+            backfill = conn.execute(
+                """SELECT count(*) FROM attempts
+                   WHERE kind='download' AND is_backfill=1
+                     AND outcome IN ('ok','running','error','deferred') AND started_at>=?""",
+                (day,),
+            ).fetchone()[0]
+        return {"today_total": total, "today_backfill": backfill}
 
     def disk_space(self) -> dict[str, int]:
         p = self.config.paths

@@ -164,4 +164,8 @@ CREATE INDEX idx_attempts_fairness ON attempts(kind, source_id, started_at DESC)
 CREATE INDEX idx_sources_due ON sources(enabled, next_check_at);
 CREATE INDEX idx_postprocess_due ON postprocess_tasks(state, next_attempt_at);
     """,
+    """
+ALTER TABLE source_entries ADD COLUMN is_history INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attempts ADD COLUMN is_backfill INTEGER NOT NULL DEFAULT 0;
+    """,
 )

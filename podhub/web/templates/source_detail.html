@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import action, rss_input, filter_fields, profile_select, pagination %}
+{% from "macros.html" import action, rss_input, filter_fields, profile_select, pagination with context %}
 {% block content %}
 {% set url = '/admin/sources/' ~ source.id %}
 <section class="panel stack">
@@ -11,6 +11,7 @@
     </div>
   </div>
   <form method="post" action="{{ url }}" class="control-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>Podcast title <input name="title" value="{{ source.title }}" required></label>
     <button name="action" value="rename" class="secondary">Save Title</button>
   </form>
@@ -18,47 +19,32 @@
   {{ action(url,'rotate','Rotate Token',variant='secondary') }}
   {% if source.last_error_message %}<p class="warn-text wrap">{{ source.last_error_message }}</p>{% endif %}
 </section>
-<div class="split">
-  <section class="panel">
-    <h2>Add Single Video</h2>
-    <form method="post" action="{{ url }}" class="control-row">
-      <label>YouTube video URL or ID <input name="video" required></label>
-      <button name="action" value="add-video">Add Video</button>
-    </form>
-  </section>
-  <section class="panel">
-    <h2>Backfill</h2>
-    <form method="post" action="{{ url }}" class="control-row">
-      <label>Oldest eligible candidates <input name="count" type="number" min="1" value="5" required></label>
-      <button name="action" value="backfill" class="secondary">Trigger Backfill</button>
-    </form>
-  </section>
-</div>
+<section class="panel">
+  <h2>Add Single Video</h2>
+  <form method="post" action="{{ url }}" class="control-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>YouTube video URL or ID <input name="video" required></label>
+    <button name="action" value="add-video">Add Video</button>
+  </form>
+</section>
 <section class="panel">
   <details>
-    <summary>Filter, retention and feed policy</summary>
+    <summary>Source settings</summary>
     <form method="post" action="{{ url }}" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         {{ filter_fields(policy) }}
         <label>Keep count (0 = unlimited) <input name="keep_count" type="number" min="0" value="{{ policy.keep_count }}" required></label>
         <label>Keep days (0 = forever) <input name="keep_days" type="number" min="0" value="{{ policy.keep_days }}" required></label>
-        <label>Unpublish grace (hours) <input name="unpublish_grace_hours" type="number" min="0" step="any" value="{{ policy.unpublish_grace_hours }}" required></label>
-        <label>Maximum feed items <input name="max_feed_items" type="number" min="1" value="{{ policy.max_feed_items }}" required></label>
+        {% if source.kind in ['playlist', 'manual'] %}
         <label>Feed order <select name="feed_order">
           <option value="published_desc" {% if policy.feed_order == 'published_desc' %}selected{% endif %}>Newest published first</option>
           <option value="playlist_serial" {% if policy.feed_order == 'playlist_serial' %}selected{% endif %}>Playlist serial</option>
         </select></label>
-        <label>Playlist scan mode <select name="playlist_scan_mode">
-          <option value="full_flat" {% if policy.playlist_scan_mode == 'full_flat' %}selected{% endif %}>Full flat scan</option>
-          <option value="head_early_stop" {% if policy.playlist_scan_mode == 'head_early_stop' %}selected{% endif %}>Stop at known items</option>
-        </select></label>
-        <label>Maximum scan items <input name="max_scan_items" type="number" min="1" value="{{ policy.max_scan_items }}" required></label>
-        <label>Consecutive known items <input name="early_stop_known" type="number" min="1" value="{{ policy.early_stop_known }}" required></label>
-        <label>Audio format <input name="audio_format" value="{{ policy.audio_format }}" required></label>
-        <label>Check interval (seconds) <input name="check_interval" type="number" min="1" value="{{ source.check_interval_s }}" required></label>
+        {% endif %}
         {{ profile_select(cookies, source.cookie_profile_id) }}
       </div>
-      <button name="action" value="policy" class="fit">Save Policy</button>
+      <button name="action" value="policy" class="fit">Save Settings</button>
     </form>
   </details>
 </section>
@@ -89,6 +75,7 @@
 </section>
 {% macro delete_form() %}
 <form method="post" action="{{ url }}" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label class="check"><input type="radio" name="files" value="keep" required> Keep files on disk</label>
   <label class="check"><input type="radio" name="files" value="delete" required> Delete source folder on disk</label>
   <button class="danger fit" name="action" value="delete">Delete Source</button>

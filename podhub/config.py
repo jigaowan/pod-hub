@@ -57,6 +57,9 @@ class Pacing(SettingsModel):
     max_concurrent_downloads: PositiveInt = 1
     min_launch_gap_s: float = Field(default=20, ge=0, allow_inf_nan=False)
     launch_jitter_s: float = Field(default=25, ge=0, allow_inf_nan=False)
+    backfill_min_gap_s: float = Field(default=60, ge=0, allow_inf_nan=False)
+    backfill_jitter_s: float = Field(default=90, ge=0, allow_inf_nan=False)
+    backfill_daily_cap: int = Field(default=30, ge=0)
     daily_download_cap: int = Field(default=0, ge=0)
     default_check_interval_s: PositiveInt = 1800
     playlist_check_interval_s: PositiveInt = 3600

@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% from "macros.html" import action %}
+{% from "macros.html" import action with context %}
 {% block content %}
 {% macro editor(row=none) %}
 <form method="post" action="/admin/cookies" class="stack" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if row %}<input type="hidden" name="id" value="{{ row.id }}">{% endif %}
   <div class="form-grid">
     <label>Name <input name="name" value="{{ row.name if row else '' }}" required></label>
@@ -27,6 +28,7 @@
       <dt>Last failure</dt><dd>{{ row.last_fail_at or '—' }}</dd>
     </dl>
     <form method="post" action="/admin/cookies" class="control-row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="id" value="{{ row.id }}">
       <label>Test video URL (optional) <input name="video"></label>
       <button name="action" value="validate" class="secondary">Validate Cookie</button>

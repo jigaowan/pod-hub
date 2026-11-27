@@ -1,4 +1,4 @@
-{% from "macros.html" import action, attempts_table %}
+{% from "macros.html" import action, attempts_table with context %}
 <div id="overview-panel" hx-get="/admin/status" hx-trigger="every 15s" hx-swap="outerHTML">
   <section class="panel status-line" aria-label="Service status">
     <div><strong class="badge {{ 'warn' if paused else 'good' }}">{{ 'Paused' if paused else 'Running' }}</strong>

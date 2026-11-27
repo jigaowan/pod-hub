@@ -15,6 +15,10 @@ document.addEventListener("click", async (event) => {
   const opener = event.target.closest("[data-dialog]");
   if (opener) document.getElementById(opener.dataset.dialog).showModal();
 });
+document.addEventListener("htmx:configRequest", (event) => {
+  const token = document.querySelector('meta[name="csrf-token"]')?.content;
+  if (token) event.detail.headers["X-CSRF-Token"] = token;
+});
 document.addEventListener("htmx:beforeRequest", (event) => {
   if (event.target.id === "overview-panel" && event.target.contains(document.activeElement)) {
     event.preventDefault();

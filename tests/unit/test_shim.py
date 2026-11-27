@@ -356,7 +356,13 @@ def test_list_sets_truthy_approximate_date_and_paginates_sort_key(monkeypatch, c
             pass
 
         def extract_info(self, url, *, download, process):
-            return {"entries": [{"id": VIDEO, "title": "Page 2 Item"}]}
+            assert download is False and process is False
+            return {"entries": [
+                {"id": "item0000001", "title": "Item 1"},
+                {"id": "item0000002", "title": "Item 2"},
+                {"id": "item0000003", "title": "Item 3"},
+                {"id": "item0000004", "title": "Item 4"},
+            ]}
 
     mod = types.ModuleType("yt_dlp")
     mod.YoutubeDL = FakeYDL
@@ -364,13 +370,12 @@ def test_list_sets_truthy_approximate_date_and_paginates_sort_key(monkeypatch, c
     version.__version__ = "2026.10.26"
     monkeypatch.setitem(sys.modules, "yt_dlp", mod)
     monkeypatch.setitem(sys.modules, "yt_dlp.version", version)
-    assert run({"mode": "list", "url": "https://www.youtube.com/playlist?list=UU" + "a" * 22, "start": 501, "limit": 50}) == 0
+    assert run({"mode": "list", "url": "https://www.youtube.com/playlist?list=UU" + "a" * 22, "start": 3, "limit": 2}) == 0
     assert captured["extractor_args"]["youtubetab"]["approximate_date"] == [""]
-    assert captured["playliststart"] == 501
-    assert captured["playlistend"] == 550
+    assert "playliststart" not in captured
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    entry = next(event for event in events if event["type"] == "entry")
-    assert entry["sort_key"] == 501
+    entries = [(event["id"], event["sort_key"]) for event in events if event["type"] == "entry"]
+    assert entries == [("item0000003", 3), ("item0000004", 4)]
 
 
 async def test_stop_group_sends_sigkill_under_repeated_cancellation(monkeypatch):

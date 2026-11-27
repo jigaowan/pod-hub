@@ -19,7 +19,7 @@ from podhub.core.notifications import Notifier, Transition
 from podhub.db.connection import Database
 from podhub.db.repositories import activate_video, policy_for, public_media, upsert_video
 from podhub.domain.enums import Category
-from podhub.domain.models import stamp
+from podhub.domain.models import stamp, utc_now
 from podhub.errors.breaker import Breakers
 from podhub.errors.retry import plan_retry
 from podhub.errors.taxonomy import Classification, classify
@@ -286,19 +286,23 @@ class Downloader:
                 and cookie["status"] in ("active", "suspect")
                 for row in self.sources_for(conn, vid)
             )
+            now = utc_now()
+            first_failure = video["attempt_count"] == 0 and video["last_category"] is None
+            fresh_deadline = stamp(now, seconds=self.config.retry.give_up_after_days * 86400) if first_failure else video["give_up_at"]
+            video_for_retry = {**dict(video), "give_up_at": fresh_deadline}
             decision = plan_retry(
-                self.config.retry, video, classified, alternate_source=alternate,
+                self.config.retry, video_for_retry, classified, alternate_source=alternate,
                 release=run.gate.get("release_timestamp") or run.probe.get("release_timestamp"),
                 live_status=run.probe.get("live_status") or run.gate.get("reason"),
             )
             conn.execute(
-                """UPDATE videos SET state=?,next_attempt_at=?,category_attempts_json=?,unclassified=?,
-                   attempt_count=attempt_count+?,priority=CASE WHEN ? THEN 30 ELSE priority END,
+                """UPDATE videos SET state=?,next_attempt_at=?,give_up_at=?,category_attempts_json=?,unclassified=?,
+                   attempt_count=attempt_count+?,priority=CASE WHEN ? THEN min(priority,30) ELSE priority END,
                    running_since=NULL,last_category=?,last_scope=?,last_error=?,updated_at=?
                    WHERE video_id=? AND state='running'""",
-                (decision.state, decision.next_attempt_at, json.dumps(decision.category_attempts),
+                (decision.state, decision.next_attempt_at, fresh_deadline, json.dumps(decision.category_attempts),
                  int(decision.unclassified), int(decision.charge_attempt), int(decision.charge_attempt),
-                 classified.category, classified.scope, classified.reason, stamp(), vid),
+                 classified.category, classified.scope, classified.reason, stamp(now), vid),
             )
         if decision.state != "pending":
             shutil.rmtree(safe_path(self.config.paths.state_dir / "tmp", f"retry-{vid}"), ignore_errors=True)

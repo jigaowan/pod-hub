@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% from "macros.html" import action, rss_input, profile_select, filter_fields %}
+{% from "macros.html" import action, rss_input, profile_select, filter_fields with context %}
 {% block content %}
 <section class="panel">
   <h2>Add Source</h2>
   <form method="post" action="/admin/sources/preview" hx-post="/admin/sources/preview" hx-target="#preview" hx-swap="innerHTML" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
       <label>YouTube URL, handle, ID or collection name
         <input name="source_input" value="{{ value or '' }}" required>

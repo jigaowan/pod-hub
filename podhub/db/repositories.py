@@ -12,7 +12,11 @@ from podhub.domain.policy import SourcePolicy
 
 
 def policy_for(source: sqlite3.Row) -> SourcePolicy:
-    return SourcePolicy.model_validate_json(source["policy_json"])
+    data = json.loads(source["policy_json"])
+    if "initial_backfill_count" in data:
+        data.setdefault("fetch_history", False)
+        data.pop("initial_backfill_count", None)
+    return SourcePolicy.model_validate(data)
 
 
 def public_media(conn: sqlite3.Connection, video_id: str) -> list[sqlite3.Row]:
@@ -95,12 +99,15 @@ def expire_deadlines(conn: sqlite3.Connection, now: str) -> None:
     conn.execute(
         """UPDATE videos SET state=CASE WHEN state='deferred' AND last_category='not_ready' THEN 'unavailable' ELSE 'failed' END,
            next_attempt_at=NULL, updated_at=?
-           WHERE state IN ('pending','deferred') AND give_up_at<=?""", (now, now),
+           WHERE state IN ('pending','deferred') AND give_up_at<=?
+             AND (attempt_count>0 OR state='deferred' OR last_category IS NOT NULL OR category_attempts_json!='{}')
+             AND EXISTS (SELECT 1 FROM source_entries e WHERE e.video_id=videos.video_id AND e.state='wanted')""",
+        (now, now),
     )
 
 
 
-def claim_video(conn: sqlite3.Connection, now: str) -> tuple[sqlite3.Row, int] | None:
+def claim_video(conn: sqlite3.Connection, now: str, *, min_priority: int = 0) -> tuple[sqlite3.Row, int] | None:
     expire_deadlines(conn, now)
     selected = conn.execute(
         """SELECT v.video_id, s.id AS source_id FROM videos v
@@ -109,6 +116,7 @@ def claim_video(conn: sqlite3.Connection, now: str) -> tuple[sqlite3.Row, int] |
            LEFT JOIN cookie_profiles c ON c.id=s.cookie_profile_id
            LEFT JOIN circuit_breakers b ON b.key='cookie:' || c.id
            WHERE (v.state='pending' OR (v.state IN ('deferred','unavailable') AND v.next_attempt_at IS NOT NULL))
+           AND v.priority>=?
            AND (v.next_attempt_at IS NULL OR v.next_attempt_at<=?)
            AND e.state='wanted' AND s.enabled=1
            AND (c.id IS NULL OR c.status IN ('active','suspect'))
@@ -121,8 +129,9 @@ def claim_video(conn: sqlite3.Connection, now: str) -> tuple[sqlite3.Row, int] |
                AND c2.status IN ('active','suspect') AND coalesce(b2.state,'closed')='closed'
            ))
            ORDER BY v.priority DESC,
-             (SELECT max(a.started_at) FROM attempts a WHERE a.kind='download' AND a.source_id=s.id),
-             v.published_at DESC, v.created_at, s.id, v.video_id LIMIT 1""", (now,),
+             v.published_at IS NULL, v.published_at DESC,
+             e.sort_key IS NULL, e.sort_key ASC,
+             v.created_at, s.id, v.video_id LIMIT 1""", (min_priority, now),
     ).fetchone()
     if selected is None:
         return None
@@ -143,12 +152,12 @@ def recover(db: Database) -> None:
 
 def start_attempt(
     conn: sqlite3.Connection, kind: str, source_id: int | None = None,
-    video_id: str | None = None, cookie_id: int | None = None,
+    video_id: str | None = None, cookie_id: int | None = None, *, is_backfill: bool = False,
 ) -> int:
     now = stamp()
     cursor = conn.execute(
-        """INSERT INTO attempts(kind,source_id,video_id,started_at,ended_at,outcome,cookie_profile_id)
-           VALUES (?,?,?,?,?,'running',?)""", (kind, source_id, video_id, now, now, cookie_id),
+        """INSERT INTO attempts(kind,source_id,video_id,started_at,ended_at,outcome,cookie_profile_id,is_backfill)
+           VALUES (?,?,?,?,?,'running',?,?)""", (kind, source_id, video_id, now, now, cookie_id, int(is_backfill)),
     )
     assert cursor.lastrowid is not None
     return cursor.lastrowid

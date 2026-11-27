@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import action, attempts_table %}
+{% from "macros.html" import action, attempts_table with context %}
 {% block content %}
 {% set url = '/admin/videos/' ~ video.video_id %}
 <section class="panel stack">

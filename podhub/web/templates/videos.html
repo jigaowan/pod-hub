@@ -5,11 +5,33 @@
   {% for key, value in tabs.items() %}<a href="?status={{ key }}" {% if status == key %}aria-current="page"{% endif %}>{{ value[0] }}</a>{% endfor %}
 </nav>
 <section class="panel">
+  <details>
+    <summary>Queue Pacing · Today: {{ pacing_stats.today_total }} total, {{ pacing_stats.today_backfill }}/{{ pacing.backfill_daily_cap or '∞' }} history{% if has_pacing_override %} (custom){% endif %}</summary>
+    <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>Max concurrent downloads <input name="max_concurrent_downloads" type="number" min="1" value="{{ pacing.max_concurrent_downloads }}" required></label>
+        <label>Minimum launch delay (seconds) <input name="min_launch_gap_s" type="number" min="0" step="any" value="{{ pacing.min_launch_gap_s }}" required></label>
+        <label>Minimum launch jitter (seconds) <input name="launch_jitter_s" type="number" min="0" step="any" value="{{ pacing.launch_jitter_s }}" required></label>
+        <label>History extra delay (seconds) <input name="backfill_min_gap_s" type="number" min="0" step="any" value="{{ pacing.backfill_min_gap_s }}" required></label>
+        <label>History extra jitter (seconds) <input name="backfill_jitter_s" type="number" min="0" step="any" value="{{ pacing.backfill_jitter_s }}" required></label>
+        <label>History daily cap (0 = unlimited) <input name="backfill_daily_cap" type="number" min="0" value="{{ pacing.backfill_daily_cap }}" required></label>
+        <label>Total daily cap (0 = unlimited) <input name="daily_download_cap" type="number" min="0" value="{{ pacing.daily_download_cap }}" required></label>
+      </div>
+      <div class="actions">
+        <button name="action" value="pacing">Save Pacing</button>
+        {% if has_pacing_override %}<button name="action" value="reset-pacing" class="secondary" formnovalidate>Reset Defaults</button>{% endif %}
+      </div>
+    </form>
+  </details>
+</section>
+<section class="panel">
   <form method="post" class="control-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>Error category <select name="category" required>
       {% for category in categories %}<option value="{{ category }}">{{ category|replace('_',' ') }}</option>{% endfor %}
     </select></label>
-    <button>Retry All in Category</button>
+    <button name="action" value="retry">Retry All in Category</button>
   </form>
 </section>
 <section class="panel">

@@ -87,29 +87,23 @@ def cookie_for(conn: sqlite3.Connection, cookie_id: int | None) -> sqlite3.Row |
 
 def list_entries(
     conn: sqlite3.Connection, config: Config, source: sqlite3.Row, entries: list[dict[str, Any]],
-    *, backfill: int | None = None, has_active_cookie: bool = False,
+    *, history_scan: bool = False, has_active_cookie: bool = False,
 ) -> int:
     policy = policy_for(source)
     seen = set()
     initial = source["last_ok_at"] is None
     latest_known = None
-    if backfill is not None and not initial:
-        # Compare new uploads against the source history before this scan changes it.
+    if history_scan and not initial:
         latest_known = conn.execute(
             """SELECT max(v.published_at) FROM source_entries e JOIN videos v USING(video_id)
                WHERE e.source_id=?""", (source["id"],),
         ).fetchone()[0]
     dated = [(parse_date(item.get("timestamp")) or parse_date(item.get("upload_date")), item) for item in entries]
-    if initial or backfill is not None:
-        # The stable date sort keeps the position order for undated entries and ties.
-        direction = 1 if backfill is None else -1
-        dated.sort(key=lambda entry: (entry[1].get("sort_key") is None, direction * (entry[1].get("sort_key") or 0)))
-        if backfill is None:
-            dated.sort(key=lambda entry: entry[0] or "", reverse=True)
-        else:
-            dated.sort(key=lambda entry: (entry[0] is None, entry[0] or ""))
-    budget = backfill if backfill is not None else policy.initial_backfill_count
-    promoted_historical = 0
+    if initial or history_scan:
+        # Order newest first so discovery timestamps and queue insertion follow newest -> oldest.
+        dated.sort(key=lambda entry: (entry[1].get("sort_key") is None, entry[1].get("sort_key") or 0))
+        dated.sort(key=lambda entry: entry[0] or "", reverse=True)
+    added = 0
     for published, item in dated:
         vid = item.get("id")
         if not isinstance(vid, str) or not VIDEO_ID.fullmatch(vid) or vid in seen:
@@ -127,26 +121,22 @@ def list_entries(
                 )
             continue
         reason = policy.rejection(item)
-        historical = backfill is not None and not (latest_known and published and published > latest_known)
-        limited = initial or historical
+        historical = initial or (history_scan and not (latest_known and published and published > latest_known))
         if reason:
             state = "filtered"
-        elif limited and budget <= 0:
+        elif historical and not policy.fetch_history:
             state = "candidate"
         else:
             state = "wanted"
-            if limited:
-                budget -= 1
-                if historical:
-                    promoted_historical += 1
+            added += 1
         conn.execute(
-            """INSERT INTO source_entries(source_id,video_id,state,filter_reason,evaluated_rev,sort_key,discovered_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (source["id"], vid, state, reason, source["policy_rev"], item.get("sort_key"), stamp()),
+            """INSERT INTO source_entries(source_id,video_id,state,filter_reason,evaluated_rev,sort_key,discovered_at,is_history)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (source["id"], vid, state, reason, source["policy_rev"], item.get("sort_key"), stamp(), int(historical)),
         )
         if state == "wanted":
-            activate_video(conn, config, vid, 10 if limited else 50, allow_auth_recovery=has_active_cookie)
-    return promoted_historical
+            activate_video(conn, config, vid, 10 if historical else 50, allow_auth_recovery=has_active_cookie)
+    return added
 
 
 class Discovery:
@@ -242,9 +232,9 @@ class Discovery:
         atom = None
         atom_kind = None
         deep = False
-        force_deep = ""
-        backfill = None
-        backfill_start = 1
+        history_scan = False
+        history_start = 1
+        history_gen = ""
         scan_limit = policy.max_scan_items
         cookie_id = source["cookie_profile_id"]
         cookie_updated_at: str | None = None
@@ -254,12 +244,12 @@ class Discovery:
                 cookie_updated_at = cookie["updated_at"] if cookie else None
                 known = {row[0] for row in conn.execute("SELECT video_id FROM source_entries WHERE source_id=?", (source["id"],))}
                 last_deep = get_meta(conn, f"last_deep:{source['id']}")
-                force_deep = get_meta(conn, f"force_deep:{source['id']}")
-                pending_backfill = int(force_deep or "0")
-                if pending_backfill > 0:
-                    backfill = pending_backfill
-                    backfill_start = max(1, int(get_meta(conn, f"backfill_cursor:{source['id']}") or "1"))
-            quick = source["kind"] == "channel" and not cookie and source["last_ok_at"] and backfill is None
+                history_flag = get_meta(conn, f"history_scan:{source['id']}")
+                history_gen = get_meta(conn, f"history_gen:{source['id']}")
+                if policy.fetch_history and (source["last_ok_at"] is None or history_flag == "1"):
+                    history_scan = True
+                    history_start = max(1, int(get_meta(conn, f"history_cursor:{source['id']}") or "1"))
+            quick = source["kind"] == "channel" and not cookie and source["last_ok_at"] and not history_scan
             rss_fallback = False
             weekly = bool(last_deep and last_deep <= stamp(seconds=-7 * 86400))
             if quick and not weekly:
@@ -275,7 +265,7 @@ class Discovery:
                         run.warnings.append("YouTube Atom failed; using a bounded flat listing")
                         log.warning("Atom fallback for source %s", source["id"])
             if atom is None and not run.error:
-                early = bool(source["last_ok_at"] and not weekly and backfill is None and (
+                early = bool(source["last_ok_at"] and not weekly and not history_scan and (
                     source["kind"] == "channel" or policy.playlist_scan_mode == "head_early_stop"
                 ))
                 consecutive = 0
@@ -288,8 +278,8 @@ class Discovery:
 
                 scan_limit = min(30, policy.max_scan_items) if rss_fallback else policy.max_scan_items
                 list_kwargs: dict[str, Any] = {}
-                if backfill is not None and backfill_start > 1:
-                    list_kwargs["start"] = backfill_start
+                if history_scan and history_start > 1:
+                    list_kwargs["start"] = history_start
                 with TemporaryDirectory(dir=self.config.paths.state_dir / "tmp") as work:
                     extras = {"cookiefile": copy_cookie(self.config.paths.state_dir / "cookies", cookie["file_path"], Path(work))} if cookie else {}
                     warnings = run.warnings
@@ -309,6 +299,7 @@ class Discovery:
         with self.db.transaction() as conn:
             current = conn.execute("SELECT * FROM sources WHERE id=?", (source["id"],)).fetchone()
             if current and current["enabled"] and current["cookie_profile_id"] == cookie_id:
+                current_policy = policy_for(current)
                 next_check = stamp(now, seconds=current["check_interval_s"] * random.uniform(0.85, 1.15))
                 next_check_overridden = current["next_check_at"] != source["next_check_at"]
                 if run.error:
@@ -327,26 +318,27 @@ class Discovery:
                         and c_row["status"] in ("active", "suspect")
                         and self.breakers.allowed(conn, (f"cookie:{cookie_id}",))
                     )
-                    promoted = list_entries(conn, self.config, current, entries, backfill=backfill, has_active_cookie=active_cookie)
-                    more_backfill = False
-                    if backfill is not None and deep:
-                        remaining = max(0, backfill - promoted)
+                    list_entries(conn, self.config, current, entries, history_scan=history_scan, has_active_cookie=active_cookie)
+                    more_history = False
+                    gen_current = get_meta(conn, f"history_gen:{source['id']}") == history_gen
+                    if history_scan and deep and current_policy.fetch_history and gen_current:
                         exhausted = len(entries) < scan_limit
-                        if remaining > 0 and not exhausted:
-                            next_offset = backfill_start + len(entries)
-                            set_meta(conn, f"force_deep:{source['id']}", str(remaining))
-                            set_meta(conn, f"backfill_cursor:{source['id']}", str(next_offset))
-                            more_backfill = True
+                        if not exhausted:
+                            next_offset = history_start + len(entries)
+                            set_meta(conn, f"history_scan:{source['id']}", "1")
+                            set_meta(conn, f"history_cursor:{source['id']}", str(next_offset))
+                            more_history = True
                         else:
-                            conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
-                            conn.execute("DELETE FROM meta WHERE key=?", (f"backfill_cursor:{source['id']}",))
-                    elif force_deep and backfill is None:
-                        conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
+                            conn.execute("DELETE FROM meta WHERE key IN (?,?)",
+                                         (f"history_scan:{source['id']}", f"history_cursor:{source['id']}"))
+                    elif not current_policy.fetch_history and gen_current:
+                        conn.execute("DELETE FROM meta WHERE key IN (?,?)",
+                                     (f"history_scan:{source['id']}", f"history_cursor:{source['id']}"))
                     conn.execute(
                         """UPDATE sources SET last_checked_at=?,last_ok_at=?,next_check_at=?,consecutive_failures=0,
                            last_error_category=NULL,last_error_message=NULL,http_etag=?,http_last_modified=?,updated_at=? WHERE id=?""",
                         (stamp(now), stamp(now),
-                         stamp(now) if more_backfill else (current["next_check_at"] if next_check_overridden else next_check),
+                         stamp(now) if more_history else (current["next_check_at"] if next_check_overridden else next_check),
                          atom.etag if atom else current["http_etag"],
                          atom.last_modified if atom else current["http_last_modified"], stamp(now), current["id"]),
                     )

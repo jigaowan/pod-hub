@@ -57,7 +57,7 @@ pod-hub doctor
 pod-hub pause
 pod-hub resume
 pod-hub sources list
-pod-hub sources add @channel --initial-backfill-count 3 --title "城市电台" --slug "東京 音訊"
+pod-hub sources add @channel --fetch-history --title "城市电台" --slug "東京 音訊"
 pod-hub sources add "Listen Later" --kind manual
 pod-hub sources sync 1
 pod-hub sources add-video 2 'https://www.youtube.com/watch?v=VIDEO_ID'

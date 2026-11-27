@@ -23,23 +23,26 @@ async def test_atomic_claim_single_winner(services, source_factory):
     assert results.count(VIDEO) == 1
 
 
-async def test_priority_and_source_fairness(services, source_factory):
+async def test_priority_newest_first_and_min_priority(services, source_factory):
     a, b = await source_factory("A"), await source_factory("B")
-    backfill, manual, new, retry = VIDEO, OTHER, THIRD, "retry123456"
-    services.add_video(a, backfill)
-    services.add_video(a, manual)
-    services.add_video(a, new)
-    services.add_video(b, retry)
+    oldest, newer, manual, new, retry = VIDEO, "newer123456", OTHER, THIRD, "retry123456"
+    for sid, vid in [(a, oldest), (b, newer), (a, manual), (a, new), (b, retry)]:
+        services.add_video(sid, vid)
     with services.db.transaction() as conn:
-        for vid, priority in [(backfill, 10), (manual, 100), (new, 50), (retry, 30)]:
-            conn.execute("UPDATE videos SET priority=? WHERE video_id=?", (priority, vid))
-        assert [claim_video(conn, stamp())[0]["video_id"] for _ in range(4)] == [manual, new, retry, backfill]
-        conn.execute("UPDATE videos SET state='pending',priority=50")
-        attempt = start_attempt(conn, "download", a, manual)
-        assert claim_video(conn, stamp())[1] == b
-        conn.execute("UPDATE attempts SET outcome='ok' WHERE id=?", (attempt,))
-        start_attempt(conn, "download", b, retry)
-        assert claim_video(conn, stamp())[1] == a
+        for vid, priority, pub in [
+            (oldest, 10, "2026-01-01T00:00:00+00:00"),
+            (newer, 10, "2026-02-01T00:00:00+00:00"),
+            (manual, 100, "2025-01-01T00:00:00+00:00"),
+            (new, 50, "2026-03-01T00:00:00+00:00"),
+            (retry, 30, "2026-01-15T00:00:00+00:00"),
+        ]:
+            conn.execute("UPDATE videos SET priority=?,published_at=? WHERE video_id=?", (priority, pub, vid))
+        assert [claim_video(conn, stamp())[0]["video_id"] for _ in range(5)] == [manual, new, retry, newer, oldest]
+        conn.execute("UPDATE videos SET state='pending'")
+        # min_priority=50 lets high-priority new/manual items run even when history cap is hit.
+        assert [claim_video(conn, stamp(), min_priority=50)[0]["video_id"] for _ in range(2)] == [manual, new]
+        assert claim_video(conn, stamp(), min_priority=50) is None
+        assert claim_video(conn, stamp())[0]["video_id"] == retry
 
 
 async def test_recovery_resets_claim_and_cleans_private_temporary_files(services, source_factory):

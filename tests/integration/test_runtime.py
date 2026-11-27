@@ -22,7 +22,7 @@ from podhub.storage.media import STAGING_PREFIX, save_cover
 from podhub.storage.paths import validate_folder_name
 from podhub.ytdlp.runner import RunResult
 
-from conftest import OTHER, VIDEO
+from conftest import OTHER, THIRD, VIDEO
 
 
 async def download_one(services, media):
@@ -311,6 +311,72 @@ async def test_scheduler_dispatches_and_honors_pause_and_daily_cap(services, sou
         assert {row[0] for row in conn.execute("SELECT state FROM videos")} == {"pending", "ready"}
 
 
+async def test_scheduler_backfill_daily_cap_does_not_block_new_uploads(services, source_factory, sample_media):
+    sid = await source_factory("BackfillCap")
+    services.runner.media = sample_media
+    services.update_pacing({"backfill_daily_cap": 1, "backfill_min_gap_s": 0, "backfill_jitter_s": 0, "min_launch_gap_s": 0, "launch_jitter_s": 0})
+    services.add_video(sid, VIDEO)
+    services.add_video(sid, OTHER)
+    services.add_video(sid, THIRD)
+    with services.db.transaction() as conn:
+        for key in ("last_retention_at", "last_reconcile_at", "last_backup_at", "last_doctor_tick"):
+            set_meta(conn, key, stamp())
+        conn.execute("UPDATE videos SET priority=10,published_at='2026-01-02T00:00:00+00:00' WHERE video_id=?", (VIDEO,))
+        conn.execute("UPDATE videos SET priority=10,published_at='2026-01-01T00:00:00+00:00' WHERE video_id=?", (OTHER,))
+        conn.execute("UPDATE videos SET priority=50,published_at='2026-02-01T00:00:00+00:00' WHERE video_id=?", (THIRD,))
+    scheduler = Scheduler(services)
+    # 1st tick claims high-priority new upload (THIRD); does not consume backfill cap.
+    await scheduler.tick()
+    await asyncio.gather(*scheduler.tasks["download"])
+    # 2nd tick claims newest historical video (VIDEO); hits backfill_daily_cap=1.
+    await scheduler.tick()
+    await asyncio.gather(*scheduler.tasks["download"])
+    # 3rd tick must NOT claim remaining historical video (OTHER) because backfill cap is reached.
+    await scheduler.tick()
+    assert not scheduler.tasks.get("download")
+    with services.db.connect() as conn:
+        assert dict(conn.execute("SELECT video_id,state FROM videos")) == {
+            THIRD: "ready", VIDEO: "ready", OTHER: "pending",
+        }
+    # A new upload that fails once (drops to priority 30) must NOT be counted as history and MUST still retry when history cap is full.
+    retry_vid = "retrynew001"
+    services.add_video(sid, retry_vid)
+    with services.db.transaction() as conn:
+        conn.execute("UPDATE videos SET priority=30,attempt_count=1,last_category='transient_network' WHERE video_id=?", (retry_vid,))
+    assert services.pacing_stats()["today_backfill"] == 1
+    await scheduler.tick()
+    await asyncio.gather(*scheduler.tasks["download"])
+    with services.db.connect() as conn:
+        assert conn.execute("SELECT state FROM videos WHERE video_id=?", (retry_vid,)).fetchone()[0] == "ready"
+        assert services.pacing_stats()["today_backfill"] == 1
+
+
+async def test_unattempted_queued_history_never_expires_before_first_attempt(services, source_factory, sample_media):
+    sid = await source_factory("LongQueue")
+    services.add_video(sid, VIDEO)
+    with services.db.transaction() as conn:
+        # Simulate a video that waited past 14 days in queue before ever being attempted.
+        conn.execute("UPDATE videos SET priority=10,give_up_at=? WHERE video_id=?", (stamp(seconds=-86400), VIDEO))
+    scheduler = Scheduler(services)
+    with services.db.transaction() as conn:
+        for key in ("last_retention_at", "last_reconcile_at", "last_backup_at", "last_doctor_tick"):
+            set_meta(conn, key, stamp())
+
+    async def transient_fail():
+        return RunResult(error={"msg": "Connection reset by peer"}, phase="download")
+
+    services.runner.before_fetch = transient_fail
+    await scheduler.tick()
+    await asyncio.gather(*scheduler.tasks["download"])
+    with services.db.connect() as conn:
+        row = conn.execute("SELECT state,priority,attempt_count,give_up_at FROM videos WHERE video_id=?", (VIDEO,)).fetchone()
+        # First actual failure refreshes give_up_at to the future and keeps history priority at 10 (not promoted to 30).
+        assert row["state"] == "pending"
+        assert row["priority"] == 10
+        assert row["attempt_count"] == 1
+        assert row["give_up_at"] > stamp()
+
+
 async def test_rate_limit_cooldown_preserves_budget_and_recovers(services, source_factory, sample_media):
     sid = await source_factory("Cooldown")
     services.add_video(sid, VIDEO)
@@ -397,11 +463,13 @@ async def test_cookie_source_discovery_reactivates_auth_required_video(services,
     services.update_source(authed, services.config.defaults, cid, 60)
     services.add_video(anon, VIDEO)
     with services.db.transaction() as conn:
+        conn.execute("UPDATE sources SET last_ok_at=? WHERE id=?", (stamp(), authed))
         conn.execute(
             "UPDATE videos SET state='unavailable',last_category='auth_required',next_attempt_at=NULL WHERE video_id=?",
             (VIDEO,),
         )
-        list_entries(conn, services.config, services.source(authed), [{"id": VIDEO, "title": "Members"}], has_active_cookie=True)
+        authed_row = conn.execute("SELECT * FROM sources WHERE id=?", (authed,)).fetchone()
+        list_entries(conn, services.config, authed_row, [{"id": VIDEO, "title": "Members"}], has_active_cookie=True)
         claim = claim_video(conn, stamp())
         assert claim is not None and claim[1] == authed
 

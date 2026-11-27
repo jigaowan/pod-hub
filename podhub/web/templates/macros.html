@@ -1,5 +1,6 @@
 {% macro action(url, value, label, field='', field_value='', variant='') %}
 <form method="post" action="{{ url }}" class="inline">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if field %}<input type="hidden" name="{{ field }}" value="{{ field_value }}">{% endif %}
   <button name="action" value="{{ value }}" class="{{ variant }}">{{ label }}</button>
 </form>
@@ -22,13 +23,13 @@
 {% endmacro %}
 
 {% macro filter_fields(policy) %}
-<label>Initial backfill <input type="number" name="initial_backfill_count" min="0" value="{{ policy.initial_backfill_count }}" required></label>
+<label class="check"><input type="checkbox" name="fetch_history" {% if policy.fetch_history %}checked{% endif %}> Fetch history</label>
+<label class="check"><input type="checkbox" name="include_shorts" {% if policy.include_shorts %}checked{% endif %}> Include Shorts</label>
+<label class="check"><input type="checkbox" name="include_live_archives" {% if policy.include_live_archives %}checked{% endif %}> Include live archives</label>
 <label>Minimum duration (seconds) <input type="number" name="min_duration_s" min="0" value="{{ policy.min_duration_s }}" required></label>
 <label>Maximum duration (0 = unlimited) <input type="number" name="max_duration_s" min="0" value="{{ policy.max_duration_s }}" required></label>
 <label>Include title pattern <input name="title_include_regex" value="{{ policy.title_include_regex }}" maxlength="256"></label>
 <label>Exclude title pattern <input name="title_exclude_regex" value="{{ policy.title_exclude_regex }}" maxlength="256"></label>
-<label class="check"><input type="checkbox" name="include_shorts" {% if policy.include_shorts %}checked{% endif %}> Include Shorts</label>
-<label class="check"><input type="checkbox" name="include_live_archives" {% if policy.include_live_archives %}checked{% endif %}> Include live archives</label>
 {% endmacro %}
 
 {% macro attempts_table(attempts, detail=false) %}

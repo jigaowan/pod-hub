@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("source")
     add.add_argument("--kind", choices=list(SourceKind))
     add.add_argument("--cookie-profile-id", type=int)
-    add.add_argument("--initial-backfill-count", type=int)
+    add.add_argument("--fetch-history", action="store_true")
     add.add_argument("--title", help="custom podcast display title")
     add.add_argument("--slug", help="custom source folder name")
     sources.add_parser("sync").add_argument("id", type=int)
@@ -70,8 +70,8 @@ async def execute(args: argparse.Namespace, services: Services) -> int:
                 case "add":
                     kind = SourceKind(args.kind) if args.kind else None
                     policy = services.config.defaults.model_dump()
-                    if args.initial_backfill_count is not None:
-                        policy["initial_backfill_count"] = args.initial_backfill_count
+                    if args.fetch_history:
+                        policy["fetch_history"] = True
                     validated = SourcePolicy.model_validate(policy)
                     preview = await services.preview(args.source, kind, args.cookie_profile_id)
                     print(await services.add_source(
