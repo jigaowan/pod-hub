@@ -134,7 +134,7 @@ CREATE TABLE video_artifacts (
     video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
     source_id INTEGER REFERENCES sources(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,               -- e.g. transcript_vtt, summary_md, chapters_json
-    rel_path TEXT NOT NULL,           -- relative to OUTPUT_DIR
+    rel_path TEXT NOT NULL UNIQUE,    -- relative to OUTPUT_DIR
     mime_type TEXT NOT NULL,
     is_public INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,

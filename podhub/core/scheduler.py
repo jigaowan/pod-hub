@@ -28,6 +28,7 @@ class Scheduler:
     def __init__(self, services: Services):
         self.services = services
         self.tasks: dict[str, set[asyncio.Task[None]]] = {}
+        self.active_downloads: dict[asyncio.Task[None], tuple[str, int]] = {}
         self.launch_after = 0.0
 
     def recover(self) -> None:
@@ -54,15 +55,24 @@ class Scheduler:
                         if item.is_file() or item.is_symlink():
                             item.unlink()
 
-    def spawn(self, group: str, coroutine: Coroutine[Any, Any, None]) -> None:
+    def spawn(self, group: str, coroutine: Coroutine[Any, Any, None], *, download_claim: tuple[str, int] | None = None) -> None:
         tasks = self.tasks.setdefault(group, set())
         task = asyncio.create_task(coroutine, name=f"podhub:{group}")
         tasks.add(task)
+        if download_claim is not None:
+            self.active_downloads[task] = download_claim
 
         def done(finished: asyncio.Task[None]) -> None:
             tasks.discard(finished)
+            claim = self.active_downloads.pop(finished, None)
             if not finished.cancelled() and (error := finished.exception()):
                 log.error("%s task failed", group, exc_info=error)
+                if claim is not None:
+                    vid, attempt = claim
+                    try:
+                        self.services.downloader.return_claim(vid, attempt, f"Download task failed: {error}")
+                    except Exception:
+                        log.exception("Failed to release orphaned claim for %s", vid)
 
         task.add_done_callback(done)
 
@@ -85,6 +95,12 @@ class Scheduler:
         config = services.config
         now = utc_now()
         with services.db.transaction() as conn:
+            active_vids = {vid for vid, _ in self.active_downloads.values()}
+            for row in conn.execute("SELECT video_id FROM videos WHERE state='running'").fetchall():
+                if row["video_id"] not in active_vids:
+                    conn.execute("UPDATE videos SET state='pending',running_since=NULL WHERE video_id=? AND state='running'", (row["video_id"],))
+                    for att in conn.execute("SELECT id FROM attempts WHERE kind='download' AND video_id=? AND outcome='running'", (row["video_id"],)).fetchall():
+                        interrupt_attempt(conn, services.breakers, att["id"], "Recovered orphaned download claim")
             expire_deadlines(conn, stamp(now))
             services.breakers.refresh(conn)
             paused = get_meta(conn, "global_paused") == "1"
@@ -134,7 +150,7 @@ class Scheduler:
             else:
                 attempt = None
         if attempt:
-            self.spawn("download", services.downloader.execute(video, sid, attempt))
+            self.spawn("download", services.downloader.execute(video, sid, attempt), download_claim=(video["video_id"], attempt))
         if self.tasks.get("discovery"):
             return
         with services.db.transaction() as conn:
@@ -153,14 +169,15 @@ class Scheduler:
 
     def cancel_downloads(self) -> None:
         for task in self.tasks.get("download", ()):
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
 
     def below_cap(self, conn: sqlite3.Connection) -> bool:
         limit = self.services.config.pacing.daily_download_cap
         if not limit:
             return True
         count = conn.execute(
-            "SELECT count(*) FROM attempts WHERE kind='download' AND outcome IN ('ok','running','error') AND started_at>=?",
+            "SELECT count(*) FROM attempts WHERE kind='download' AND outcome IN ('ok','running','error','deferred') AND started_at>=?",
             (utc_day(),),
         ).fetchone()[0]
         return count < limit

@@ -48,7 +48,9 @@ def test_classification_matrix(run, cookie, expected):
     ("This video is no longer available", None, False, "permanent_unavailable", "video"),
     ("Join this channel to get access to members-only content", None, False, "auth_required", "video"),
     ("This video is available to this channel’s members", None, False, "auth_required", "video"),
-    ("This video is available to this channel’s members", None, True, "cookie_invalid", "cookie"),
+    ("This video is available to this channel’s members", None, True, "auth_required", "video"),
+    ("Join this channel to get access to members-only content", None, True, "auth_required", "video"),
+    ("Sign in to confirm your age", None, True, "cookie_invalid", "cookie"),
     ("This video is not available from your location due to geo restriction", "GeoRestrictedError", False, "soft_unavailable", "video"),
     ("The uploader has not made this video available in your country", None, False, "soft_unavailable", "video"),
     ("Unavailable here", "GeoRestrictedError", False, "soft_unavailable", "video"),
@@ -191,3 +193,63 @@ async def test_distinct_source_correlation(services, source_factory, message, st
             assert (result.category == category) == (index == 3)
         conn.execute("UPDATE attempts SET ended_at=? WHERE source_id=?", (stamp(seconds=-601), sources[0]))
         assert services.breakers.correlate(conn, classify(run)).category != category
+
+
+async def test_long_live_uses_progressive_backoff_not_60s_loop(services, source_factory):
+    sid = await source_factory()
+    services.add_video(sid, VIDEO)
+    failure = classify(RunResult(gate={"action": "defer", "reason": "is_live"}))
+    now = utc_now()
+    past_release = int((now - timedelta(hours=1)).timestamp())
+    with services.db.transaction() as conn:
+        for attempt_idx, expected_delay in enumerate((1800, 3600, 7200)):
+            conn.execute("UPDATE videos SET category_attempts_json=?", (json.dumps({"not_ready": attempt_idx}),))
+            video = conn.execute("SELECT * FROM videos").fetchone()
+            decision = plan_retry(services.config.retry, video, failure, release=past_release, live_status="is_live", now=now)
+            assert decision.state == "deferred"
+            assert decision.next_attempt_at == stamp(now, seconds=expected_delay)
+
+
+async def test_soft_unavailable_recheck_survives_transient_or_429_after_deadline(services, source_factory):
+    sid = await source_factory()
+    services.add_video(sid, VIDEO)
+    now = utc_now()
+    past_deadline = now + timedelta(days=20)
+    with services.db.transaction() as conn:
+        conn.execute(
+            "UPDATE videos SET state='unavailable',last_category='soft_unavailable',next_attempt_at=? WHERE video_id=?",
+            (stamp(past_deadline), VIDEO),
+        )
+        video = conn.execute("SELECT * FROM videos").fetchone()
+        for run in (RunResult(error={"http_status": 429}), RunResult(error={"http_status": 503})):
+            decision = plan_retry(services.config.retry, video, classify(run), now=past_deadline)
+            assert decision.state == "unavailable" and decision.next_attempt_at is not None
+
+
+async def test_stale_cookie_attempt_does_not_trip_updated_profile(services):
+    cid = services.save_cookie("Login", COOKIES)
+    with services.db.connect() as conn:
+        old_updated = conn.execute("SELECT updated_at FROM cookie_profiles WHERE id=?", (cid,)).fetchone()[0]
+    with services.db.transaction() as conn:
+        conn.execute("UPDATE cookie_profiles SET updated_at=? WHERE id=?", (stamp(seconds=60), cid))
+        attempt = start_attempt(conn, "download", cookie_id=cid)
+        run = RunResult(warnings=["The provided YouTube account cookies are no longer valid"], error={"msg": "Sign in"})
+        failure = classify(run, used_cookie=True)
+        _, events = finish_attempt(conn, services.breakers, attempt, run, "error", failure, cid, cookie_updated_at=old_updated)
+        assert not events
+        assert services.breakers.allowed(conn, (f"cookie:{cid}",))
+        assert conn.execute("SELECT status FROM cookie_profiles WHERE id=?", (cid,)).fetchone()[0] == "active"
+
+
+def test_atom_probe_without_ytdlp_does_not_close_toolchain_breaker(services):
+    b = services.breakers
+    invalid = classify(RunResult(error={"msg": "Unable to extract"}))
+    with services.db.transaction() as conn:
+        b.trip(conn, "toolchain", invalid, "2025.10.08")
+        b.refresh(conn, "2025.11.01")
+        attempt = start_attempt(conn, "discovery")
+        b.reserve(conn, ("toolchain",), attempt)
+        # Pure Atom 304/200 has no yt-dlp version, so toolchain breaker must stay half_open.
+        _, events = finish_attempt(conn, b, attempt, RunResult(), "ok")
+        assert not events
+        assert conn.execute("SELECT state FROM circuit_breakers WHERE key='toolchain'").fetchone()[0] == "half_open"

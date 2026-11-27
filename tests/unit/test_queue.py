@@ -65,6 +65,6 @@ def test_sqlite_invariants_and_backup(services):
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
     backup = db.backup(services.config.paths.state_dir / "backups")
     assert backup.is_file() and backup.stat().st_size > 0

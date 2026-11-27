@@ -8,7 +8,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       appDependencies = ps: with ps; [
-        fastapi starlette uvicorn jinja2 python-multipart pydantic httpx pathvalidate
+        fastapi starlette uvicorn jinja2 python-multipart pydantic httpx socksio pathvalidate
       ];
       testDependencies = ps: with ps; [ pytest pytest-asyncio ];
       toolPython = pkgs: package:
@@ -57,11 +57,18 @@
           cfg = config.services.pod-hub;
           defaultAccount = "pod-hub";
           toml = pkgs.formats.toml {};
+          effectiveYtdlp =
+            if cfg.jsRuntimePackage != null && cfg.ytdlpPackage ? override
+            then cfg.ytdlpPackage.override { jsRuntime = cfg.jsRuntimePackage; }
+            else cfg.ytdlpPackage;
+          effectiveYtdlpPython =
+            if cfg.ytdlpPython != null then cfg.ytdlpPython
+            else "${toolPython pkgs effectiveYtdlp}/bin/python3";
           configFile = toml.generate "pod-hub-config.toml" (lib.recursiveUpdate {
             paths = { state_dir = cfg.stateDir; output_dir = cfg.outputDir; };
             web = { listen_host = cfg.listenAddress; listen_port = cfg.port; base_url = cfg.baseUrl; };
             toolchain = {
-              ytdlp_python = "${toolPython pkgs cfg.ytdlpPackage}/bin/python3";
+              ytdlp_python = effectiveYtdlpPython;
               ffmpeg_path = "${cfg.ffmpegPackage}/bin/ffmpeg";
               ffprobe_path = "${cfg.ffmpegPackage}/bin/ffprobe";
               js_runtime = if cfg.jsRuntimePackage == null then "" else lib.getExe cfg.jsRuntimePackage;
@@ -80,25 +87,35 @@
             stateDir = lib.mkOption { type = lib.types.str; default = "/var/lib/pod-hub"; description = "Absolute path for the private database, backups and working state."; };
             outputDir = lib.mkOption { type = lib.types.str; default = "/var/lib/pod-hub/output"; description = "Absolute path for published podcast folders."; };
             ytdlpPackage = lib.mkPackageOption pkgs "yt-dlp" {};
+            ytdlpPython = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Optional absolute path to a Python interpreter that can import yt_dlp (use when supplying yt-dlp from another nixpkgs with a different Python version).";
+            };
             ffmpegPackage = lib.mkPackageOption pkgs "ffmpeg" {};
             jsRuntimePackage = lib.mkOption { type = lib.types.nullOr lib.types.package; default = pkgs.deno; description = "yt-dlp JavaScript runtime package."; };
             environmentFile = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; description = "Absolute path to an optional systemd environment file for secrets."; };
-            settings = lib.mkOption { type = toml.type; default = {}; description = "Additional TOML settings. Keep secrets in environmentFile."; };
+            settings = lib.mkOption { type = toml.type; default = {}; description = "Additional TOML settings. Use stateDir/outputDir instead of settings.paths, and keep secrets in environmentFile."; };
           };
 
           config = lib.mkIf cfg.enable {
-            assertions = lib.mapAttrsToList (name: value: {
+            assertions = (lib.mapAttrsToList (name: value: {
               assertion = value == null || lib.hasPrefix "/" value;
               message = "services.pod-hub.${name} must be an absolute path.";
-            }) { inherit (cfg) stateDir outputDir environmentFile; };
+            }) { inherit (cfg) stateDir outputDir environmentFile ytdlpPython; }) ++ [
+              {
+                assertion = !(cfg.settings ? paths);
+                message = "services.pod-hub.settings.paths must not be set; configure services.pod-hub.stateDir and services.pod-hub.outputDir instead.";
+              }
+            ];
             users.groups = lib.optionalAttrs (cfg.group == defaultAccount) { ${defaultAccount} = {}; };
             users.users = lib.optionalAttrs (cfg.user == defaultAccount) {
               ${defaultAccount} = { isSystemUser = true; group = cfg.group; };
             };
-            systemd.tmpfiles.rules = [
-              "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
-              "d ${cfg.outputDir} 0755 ${cfg.user} ${cfg.group} -"
-            ];
+            systemd.tmpfiles.settings."10-pod-hub" = {
+              ${cfg.stateDir}.d = { mode = "0750"; user = cfg.user; group = cfg.group; };
+              ${cfg.outputDir}.d = { mode = "0755"; user = cfg.user; group = cfg.group; };
+            };
             systemd.services.pod-hub = {
               description = "Pod Hub podcast service";
               after = [ "network-online.target" ];

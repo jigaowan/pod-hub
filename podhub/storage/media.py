@@ -21,6 +21,12 @@ def sync_directory(directory: Path) -> None:
         os.close(fd)
 
 
+HARDLINK_FALLBACK_ERRNOS = frozenset(
+    code for name in ("EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS")
+    if (code := getattr(errno, name, None)) is not None
+)
+
+
 def atomic_publish(source: Path, target: Path, *, hardlink: bool = False) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -39,7 +45,7 @@ def atomic_publish(source: Path, target: Path, *, hardlink: bool = False) -> Non
             return
         atomic_copy(source, target)
     except OSError as exc:
-        if exc.errno != errno.EXDEV:
+        if exc.errno != errno.EXDEV and not (hardlink and exc.errno in HARDLINK_FALLBACK_ERRNOS):
             raise
         atomic_copy(source, target)
     sync_directory(target.parent)

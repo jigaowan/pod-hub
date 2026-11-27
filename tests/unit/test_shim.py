@@ -337,3 +337,66 @@ def test_exdev_atomic_copy_leaves_no_stage_file(tmp_path, monkeypatch):
     atomic_publish(source, target)
     assert target.read_bytes() == source.read_bytes()
     assert list(target.parent.iterdir()) == [target]
+
+
+def test_list_sets_truthy_approximate_date_and_paginates_sort_key(monkeypatch, capsys):
+    import json
+    import types
+
+    captured = {}
+
+    class FakeYDL:
+        def __init__(self, options):
+            captured.update(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def extract_info(self, url, *, download, process):
+            return {"entries": [{"id": VIDEO, "title": "Page 2 Item"}]}
+
+    mod = types.ModuleType("yt_dlp")
+    mod.YoutubeDL = FakeYDL
+    version = types.ModuleType("yt_dlp.version")
+    version.__version__ = "2026.10.26"
+    monkeypatch.setitem(sys.modules, "yt_dlp", mod)
+    monkeypatch.setitem(sys.modules, "yt_dlp.version", version)
+    assert run({"mode": "list", "url": "https://www.youtube.com/playlist?list=UU" + "a" * 22, "start": 501, "limit": 50}) == 0
+    assert captured["extractor_args"]["youtubetab"]["approximate_date"] == [""]
+    assert captured["playliststart"] == 501
+    assert captured["playlistend"] == 550
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    entry = next(event for event in events if event["type"] == "entry")
+    assert entry["sort_key"] == 501
+
+
+async def test_stop_group_sends_sigkill_under_repeated_cancellation(monkeypatch):
+    import asyncio
+    from podhub.ytdlp import runner
+
+    signals: list[int] = []
+    waited = False
+
+    class StubProc:
+        pid = 999999
+        returncode = None
+
+        async def wait(self):
+            nonlocal waited
+            waited = True
+            self.returncode = -9
+            return -9
+
+    def fake_killpg(pid, sig):
+        signals.append(sig)
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    task = asyncio.create_task(runner.stop_group(StubProc(), grace=5.0))
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert signal.SIGTERM in signals and signal.SIGKILL in signals and waited

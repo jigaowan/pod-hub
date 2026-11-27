@@ -352,3 +352,85 @@ async def test_retention_pinning(services, source_factory, sample_media, pin):
     sweep(services.config, services.db)
     with services.db.connect() as conn:
         assert conn.execute("SELECT state FROM source_entries").fetchone()[0] == ("published" if pin else "retiring")
+
+
+async def test_delete_source_requeues_shared_wanted_video(services, source_factory, sample_media):
+    a, b = await source_factory("Source A"), await source_factory("Source B")
+    services.add_video(a, VIDEO)
+    await download_one(services, sample_media)
+    # B wants the same video, but link_ready has not run yet when A is deleted.
+    services.add_video(b, VIDEO)
+    services.delete_source(a, delete_files=True)
+    with services.db.transaction() as conn:
+        video = conn.execute("SELECT state FROM videos WHERE video_id=?", (VIDEO,)).fetchone()
+        assert video["state"] == "pending"
+        claim = claim_video(conn, stamp())
+        assert claim is not None and claim[1] == b
+
+
+async def test_link_ready_isolates_source_failure_and_publishes_other_sources(services, source_factory, sample_media, monkeypatch):
+    a, b, c = await source_factory("Origin"), await source_factory("Broken"), await source_factory("Healthy")
+    services.add_video(a, VIDEO)
+    await download_one(services, sample_media)
+    services.add_video(b, VIDEO)
+    services.add_video(c, VIDEO)
+    broken_slug = services.source(b)["slug"]
+    real_publish = services.downloader.publish
+
+    def flaky_publish(conn, source, video_id, origin, *, hardlink):
+        if source["slug"] == broken_slug:
+            raise PermissionError("read-only folder")
+        return real_publish(conn, source, video_id, origin, hardlink=hardlink)
+
+    monkeypatch.setattr(services.downloader, "publish", flaky_publish)
+    services.downloader.link_ready()
+    with services.db.connect() as conn:
+        assert conn.execute("SELECT state FROM source_entries WHERE source_id=? AND video_id=?", (c, VIDEO)).fetchone()[0] == "published"
+        assert conn.execute("SELECT last_error_category FROM sources WHERE id=?", (b,)).fetchone()[0] == "local_resource"
+
+
+async def test_cookie_source_discovery_reactivates_auth_required_video(services, source_factory):
+    from conftest import COOKIES
+
+    anon, authed = await source_factory("Anon"), await source_factory("Authed")
+    cid = services.save_cookie("Login", COOKIES)
+    services.update_source(authed, services.config.defaults, cid, 60)
+    services.add_video(anon, VIDEO)
+    with services.db.transaction() as conn:
+        conn.execute(
+            "UPDATE videos SET state='unavailable',last_category='auth_required',next_attempt_at=NULL WHERE video_id=?",
+            (VIDEO,),
+        )
+        list_entries(conn, services.config, services.source(authed), [{"id": VIDEO, "title": "Members"}], has_active_cookie=True)
+        claim = claim_video(conn, stamp())
+        assert claim is not None and claim[1] == authed
+
+
+async def test_validate_cookie_rejects_non_auth_cookie_file(services):
+    non_auth = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tf6=40000000\n"
+    cid = services.save_cookie("NoLogin", non_auth)
+    assert not await services.validate_cookie(cid)
+    with services.db.connect() as conn:
+        assert conn.execute("SELECT status FROM cookie_profiles WHERE id=?", (cid,)).fetchone()[0] == "expired"
+
+
+async def test_postprocess_rejects_unprefixed_artifact_name(services, source_factory, sample_media):
+    class CollidingProcessor:
+        name = "colliding"
+
+        def is_enabled_for_source(self, source_policy):
+            return True
+
+        async def process(self, ctx):
+            (ctx.artifacts_dir / "shared.vtt").write_text("WEBVTT\n")
+            return [ArtifactResult("transcript_vtt", f"{slug}/artifacts/shared.vtt", "text/vtt")]
+
+    sid = await source_factory("Artifacts")
+    slug = services.source(sid)["slug"]
+    services.registry.register(CollidingProcessor())
+    services.add_video(sid, VIDEO)
+    await download_one(services, sample_media)
+    await services.worker.run_next()
+    with services.db.connect() as conn:
+        assert conn.execute("SELECT state FROM postprocess_tasks").fetchone()[0] == "failed"
+        assert conn.execute("SELECT count(*) FROM video_artifacts").fetchone()[0] == 0

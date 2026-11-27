@@ -88,6 +88,9 @@ def cookie_id(form: FormData) -> int | None:
     return number(form, "cookie_profile_id")
 
 
+MAX_ADMIN_FORM_BYTES = 2_500_000
+
+
 @asynccontextmanager
 async def checked_form(request: Request) -> AsyncIterator[FormData]:
     services: Services = request.app.state.services
@@ -97,7 +100,22 @@ async def checked_form(request: Request) -> AsyncIterator[FormData]:
         origin and (urlsplit(origin).netloc not in allowed or urlsplit(origin).scheme not in ("http", "https"))
     ):
         raise HTTPException(403, "cross-origin form submission")
-    async with request.form(max_fields=50, max_files=1, max_part_size=2_000_000) as form:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_ADMIN_FORM_BYTES:
+                raise HTTPException(413, "form payload too large")
+        except ValueError:
+            raise HTTPException(400, "invalid content-length") from None
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_ADMIN_FORM_BYTES:
+            raise HTTPException(413, "form payload too large")
+        chunks.append(chunk)
+    request._body = b"".join(chunks)
+    async with request.form(max_fields=50, max_files=0, max_part_size=2_000_000) as form:
         yield form
 
 

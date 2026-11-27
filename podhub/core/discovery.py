@@ -87,8 +87,8 @@ def cookie_for(conn: sqlite3.Connection, cookie_id: int | None) -> sqlite3.Row |
 
 def list_entries(
     conn: sqlite3.Connection, config: Config, source: sqlite3.Row, entries: list[dict[str, Any]],
-    *, backfill: int | None = None,
-) -> None:
+    *, backfill: int | None = None, has_active_cookie: bool = False,
+) -> int:
     policy = policy_for(source)
     seen = set()
     initial = source["last_ok_at"] is None
@@ -109,6 +109,7 @@ def list_entries(
         else:
             dated.sort(key=lambda entry: (entry[0] is None, entry[0] or ""))
     budget = backfill if backfill is not None else policy.initial_backfill_count
+    promoted_historical = 0
     for published, item in dated:
         vid = item.get("id")
         if not isinstance(vid, str) or not VIDEO_ID.fullmatch(vid) or vid in seen:
@@ -136,13 +137,16 @@ def list_entries(
             state = "wanted"
             if limited:
                 budget -= 1
+                if historical:
+                    promoted_historical += 1
         conn.execute(
             """INSERT INTO source_entries(source_id,video_id,state,filter_reason,evaluated_rev,sort_key,discovered_at)
                VALUES (?,?,?,?,?,?,?)""",
             (source["id"], vid, state, reason, source["policy_rev"], item.get("sort_key"), stamp()),
         )
         if state == "wanted":
-            activate_video(conn, config, vid, 10 if limited else 50)
+            activate_video(conn, config, vid, 10 if limited else 50, allow_auth_recovery=has_active_cookie)
+    return promoted_historical
 
 
 class Discovery:
@@ -197,8 +201,11 @@ class Discovery:
         if failure and failure.category == Category.COOKIE_INVALID:
             run.error = {"msg": failure.reason}
         with self.db.transaction() as conn:
-            _, events = finish_attempt(conn, self.breakers, attempt, run, "error" if run.error else "ok",
-                                       failure if run.error else None, cookie_id)
+            _, events = finish_attempt(
+                conn, self.breakers, attempt, run, "error" if run.error else "ok",
+                failure if run.error else None, cookie_id,
+                cookie_updated_at=cookie["updated_at"] if cookie else None,
+            )
         await self.notifier.send(events)
         if run.error or identity is None:
             raise SourceError((failure.reason if failure else "could not resolve the source"))
@@ -237,16 +244,21 @@ class Discovery:
         deep = False
         force_deep = ""
         backfill = None
+        backfill_start = 1
+        scan_limit = policy.max_scan_items
         cookie_id = source["cookie_profile_id"]
+        cookie_updated_at: str | None = None
         try:
             with self.db.connect() as conn:
                 cookie = cookie_for(conn, cookie_id)
+                cookie_updated_at = cookie["updated_at"] if cookie else None
                 known = {row[0] for row in conn.execute("SELECT video_id FROM source_entries WHERE source_id=?", (source["id"],))}
                 last_deep = get_meta(conn, f"last_deep:{source['id']}")
                 force_deep = get_meta(conn, f"force_deep:{source['id']}")
                 pending_backfill = int(force_deep or "0")
                 if pending_backfill > 0:
                     backfill = pending_backfill
+                    backfill_start = max(1, int(get_meta(conn, f"backfill_cursor:{source['id']}") or "1"))
             quick = source["kind"] == "channel" and not cookie and source["last_ok_at"] and backfill is None
             rss_fallback = False
             weekly = bool(last_deep and last_deep <= stamp(seconds=-7 * 86400))
@@ -254,7 +266,7 @@ class Discovery:
                 try:
                     atom, atom_kind = await self.atom(source, policy)
                     entries = atom.entries
-                except (httpx.HTTPError, ET.ParseError) as exc:
+                except (httpx.HTTPError, ET.ParseError, ImportError) as exc:
                     status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
                     if status == 429:
                         run.error = {"http_status": 429, "msg": "YouTube Atom rate limited"}
@@ -274,13 +286,16 @@ class Discovery:
                     consecutive = consecutive + 1 if item.get("id") in known else 0
                     return not early or consecutive < policy.early_stop_known
 
+                scan_limit = min(30, policy.max_scan_items) if rss_fallback else policy.max_scan_items
+                list_kwargs: dict[str, Any] = {}
+                if backfill is not None and backfill_start > 1:
+                    list_kwargs["start"] = backfill_start
                 with TemporaryDirectory(dir=self.config.paths.state_dir / "tmp") as work:
                     extras = {"cookiefile": copy_cookie(self.config.paths.state_dir / "cookies", cookie["file_path"], Path(work))} if cookie else {}
                     warnings = run.warnings
                     run = await self.runner.run(
                         "list", url=listing_url(source["kind"], source["external_id"], source["url"]),
-                        limit=min(30, policy.max_scan_items) if rss_fallback else policy.max_scan_items,
-                        on_entry=collect, **extras,
+                        limit=scan_limit, on_entry=collect, **list_kwargs, **extras,
                     )
                     run.warnings[:0] = warnings
                     self.check_version(run)
@@ -307,11 +322,31 @@ class Discovery:
                          failure.reason if failure else None, stamp(now), current["id"]),
                     )
                 else:
-                    list_entries(conn, self.config, current, entries, backfill=backfill)
+                    active_cookie = bool(
+                        cookie_id and (c_row := cookie_for(conn, cookie_id))
+                        and c_row["status"] in ("active", "suspect")
+                        and self.breakers.allowed(conn, (f"cookie:{cookie_id}",))
+                    )
+                    promoted = list_entries(conn, self.config, current, entries, backfill=backfill, has_active_cookie=active_cookie)
+                    more_backfill = False
+                    if backfill is not None and deep:
+                        remaining = max(0, backfill - promoted)
+                        exhausted = len(entries) < scan_limit
+                        if remaining > 0 and not exhausted:
+                            next_offset = backfill_start + len(entries)
+                            set_meta(conn, f"force_deep:{source['id']}", str(remaining))
+                            set_meta(conn, f"backfill_cursor:{source['id']}", str(next_offset))
+                            more_backfill = True
+                        else:
+                            conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
+                            conn.execute("DELETE FROM meta WHERE key=?", (f"backfill_cursor:{source['id']}",))
+                    elif force_deep and backfill is None:
+                        conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
                     conn.execute(
                         """UPDATE sources SET last_checked_at=?,last_ok_at=?,next_check_at=?,consecutive_failures=0,
                            last_error_category=NULL,last_error_message=NULL,http_etag=?,http_last_modified=?,updated_at=? WHERE id=?""",
-                        (stamp(now), stamp(now), current["next_check_at"] if next_check_overridden else next_check,
+                        (stamp(now), stamp(now),
+                         stamp(now) if more_backfill else (current["next_check_at"] if next_check_overridden else next_check),
                          atom.etag if atom else current["http_etag"],
                          atom.last_modified if atom else current["http_last_modified"], stamp(now), current["id"]),
                     )
@@ -319,10 +354,10 @@ class Discovery:
                         set_meta(conn, f"atom_variant:{source['id']}", atom_kind)
                     if deep:
                         set_meta(conn, f"last_deep:{source['id']}", stamp(now))
-                    if force_deep and (backfill is None or deep):
-                        conn.execute("DELETE FROM meta WHERE key=? AND value=?", (f"force_deep:{source['id']}", force_deep))
-            _, events = finish_attempt(conn, self.breakers, attempt, run, "error" if run.error else "ok",
-                                       failure if run.error else None, cookie_id)
+            _, events = finish_attempt(
+                conn, self.breakers, attempt, run, "error" if run.error else "ok",
+                failure if run.error else None, cookie_id, cookie_updated_at=cookie_updated_at,
+            )
         await self.notifier.send(events)
 
 

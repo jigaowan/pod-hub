@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import logging
 import shutil
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from podhub.config import Config
 from podhub.core.attempts import finish_attempt, interrupt_attempt
@@ -89,36 +92,53 @@ class Downloader:
 
     def link_ready(self, limit: int = 20) -> None:
         root = self.config.paths.output_dir
-        with self.db.transaction() as conn:
-            videos = conn.execute(
-                """SELECT DISTINCT v.* FROM videos v JOIN source_entries e ON e.video_id=v.video_id
-                   JOIN sources s ON s.id=e.source_id WHERE v.state='ready' AND e.state='wanted'
-                   AND s.enabled=1 LIMIT ?""", (limit,),
-            ).fetchall()
-            for video in videos:
-                vid = video["video_id"]
-                eligible = self.apply_probe_filters(conn, vid, json.loads(video["meta_json"] or "{}"), self.sources_for(conn, vid))
-                if not eligible:
-                    continue
-                files = (
-                    safe_path(root, row["entry_media_path"]) for row in public_media(conn, vid)
-                )
-                origin = next((path for path in files if path.is_file()), None)
-                if not origin:
-                    conn.execute(
-                        """UPDATE source_entries SET state='wanted',entry_media_path=NULL
-                           WHERE video_id=? AND state='published'""", (vid,),
+        with self.db.connect() as conn:
+            video_ids = [
+                row[0] for row in conn.execute(
+                    """SELECT DISTINCT v.video_id FROM videos v JOIN source_entries e ON e.video_id=v.video_id
+                       JOIN sources s ON s.id=e.source_id WHERE v.state='ready' AND e.state='wanted'
+                       AND s.enabled=1 LIMIT ?""", (limit,),
+                ).fetchall()
+            ]
+        for vid in video_ids:
+            try:
+                with self.db.transaction() as conn:
+                    video = conn.execute("SELECT * FROM videos WHERE video_id=? AND state='ready'", (vid,)).fetchone()
+                    if video is None:
+                        continue
+                    eligible = self.apply_probe_filters(conn, vid, json.loads(video["meta_json"] or "{}"), self.sources_for(conn, vid))
+                    if not eligible:
+                        continue
+                    files = (
+                        safe_path(root, row["entry_media_path"]) for row in public_media(conn, vid)
                     )
-                    conn.execute("UPDATE videos SET state='purged',give_up_at=NULL WHERE video_id=?", (vid,))
-                    activate_video(conn, self.config, vid, 50)
-                    continue
-                for source in eligible:
-                    self.publish(conn, source, vid, origin, hardlink=True)
+                    origin = next((path for path in files if path.is_file()), None)
+                    if not origin:
+                        conn.execute(
+                            """UPDATE source_entries SET state='wanted',entry_media_path=NULL
+                               WHERE video_id=? AND state='published'""", (vid,),
+                        )
+                        conn.execute("UPDATE videos SET state='purged',give_up_at=NULL WHERE video_id=?", (vid,))
+                        activate_video(conn, self.config, vid, 50)
+                        continue
+                    for source in eligible:
+                        try:
+                            self.publish(conn, source, vid, origin, hardlink=True)
+                        except (OSError, ValueError) as exc:
+                            log.warning("Failed to publish shared audio for source %s video %s: %s", source["id"], vid, exc)
+                            conn.execute(
+                                """UPDATE sources SET last_error_category='local_resource',last_error_message=?,
+                                   updated_at=? WHERE id=?""",
+                                (redact(str(exc))[:500], stamp(), source["id"]),
+                            )
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                log.warning("link_ready skipped video %s due to error: %s", vid, exc)
 
     async def execute(self, video: sqlite3.Row, source_id: int, attempt: int) -> None:
         vid = video["video_id"]
         run = RunResult()
         cookie_id = None
+        cookie_updated_at: str | None = None
         failure: Classification | None = None
         work_root = self.config.paths.state_dir / "tmp"
         parts = safe_path(work_root, f"retry-{vid}")
@@ -134,6 +154,7 @@ class Downloader:
                             return
                         cookie_id = source["cookie_profile_id"]
                         cookie = cookie_for(conn, cookie_id)
+                        cookie_updated_at = cookie["updated_at"] if cookie else None
                     for old in parts.glob("input.*"):
                         old.replace(workspace / old.name)
                     if parts.is_dir():
@@ -157,12 +178,12 @@ class Downloader:
                                 parts.mkdir(mode=0o700, exist_ok=True)
                                 for partial in partials:
                                     partial.replace(parts / partial.name)
-                        await self.record_failure(video, source_id, cookie_id, attempt, run, failure)
+                        await self.record_failure(video, source_id, cookie_id, cookie_updated_at, attempt, run, failure)
                         return
                     if run.probe.get("id") != vid:
                         raise CorruptedArtifact("yt-dlp returned a different video ID")
                     if run.gate.get("action") in ("filter", "skip"):
-                        events = self.finish_filtered(video, attempt, run, cookie_id, sources)
+                        events = self.finish_filtered(video, attempt, run, cookie_id, cookie_updated_at, sources)
                     else:
                         audio = Path(run.result.get("filepath") or workspace / "audio.m4a")
                         if audio.resolve().parent != workspace or audio.is_symlink():
@@ -170,7 +191,7 @@ class Downloader:
                         media = await validate_media(self.config.toolchain.ffprobe_path, audio, run.probe.get("duration"))
                         if failure and failure.category == Category.DEGRADABLE_POSTPROCESS and failure.reason not in run.warnings:
                             run.warnings.append(failure.reason)
-                        events = self.finish_ready(video, attempt, run, audio, media, cookie_id, failure)
+                        events = self.finish_ready(video, attempt, run, audio, media, cookie_id, cookie_updated_at, failure)
                     await self.notifier.send(events)
                 except asyncio.CancelledError:
                     raise
@@ -178,21 +199,24 @@ class Downloader:
                     category = "LocalResource" if isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EACCES, errno.EROFS, errno.EDQUOT) else type(exc).__name__
                     run.error = {"exc_class": category, "msg": redact(str(exc), (self.config.toolchain.ytdlp_proxy,))}
                     failure = classify(run, used_cookie=cookie_id is not None, minimum=self.config.toolchain.min_ytdlp_version)
-                    await self.record_failure(video, source_id, cookie_id, attempt, run, failure)
+                    await self.record_failure(video, source_id, cookie_id, cookie_updated_at, attempt, run, failure)
         except asyncio.CancelledError:
             self.return_claim(vid, attempt, "Interrupted by shutdown")
             raise
         except Exception as exc:
             run.error = {"exc_class": type(exc).__name__, "msg": redact(str(exc))}
             failure = classify(run, used_cookie=cookie_id is not None)
-            await self.record_failure(video, source_id, cookie_id, attempt, run, failure)
+            await self.record_failure(video, source_id, cookie_id, cookie_updated_at, attempt, run, failure)
 
     def return_claim(self, vid: str, attempt: int, reason: str) -> None:
         with self.db.transaction() as conn:
             conn.execute("UPDATE videos SET state='pending',running_since=NULL WHERE video_id=? AND state='running'", (vid,))
             interrupt_attempt(conn, self.breakers, attempt, reason)
 
-    def finish_filtered(self, video: sqlite3.Row, attempt: int, run: RunResult, cookie_id: int | None, sources: list[sqlite3.Row]) -> list[Transition]:
+    def finish_filtered(
+        self, video: sqlite3.Row, attempt: int, run: RunResult, cookie_id: int | None,
+        cookie_updated_at: str | None, sources: list[sqlite3.Row],
+    ) -> list[Transition]:
         vid = video["video_id"]
         with self.db.transaction() as conn:
             if run.probe.get("id") == vid:
@@ -213,12 +237,12 @@ class Downloader:
                    give_up_at=CASE WHEN EXISTS (SELECT 1 FROM source_entries WHERE video_id=? AND state='wanted')
                    THEN give_up_at ELSE NULL END WHERE video_id=? AND state='running'""", (vid, vid),
             )
-            _, events = finish_attempt(conn, self.breakers, attempt, run, "skipped", cookie_id=cookie_id)
+            _, events = finish_attempt(conn, self.breakers, attempt, run, "skipped", cookie_id=cookie_id, cookie_updated_at=cookie_updated_at)
             return events
 
     def finish_ready(
         self, video: sqlite3.Row, attempt: int, run: RunResult, audio: Path, media: MediaInfo,
-        cookie_id: int | None, failure: Classification | None,
+        cookie_id: int | None, cookie_updated_at: str | None, failure: Classification | None,
     ) -> list[Transition]:
         vid = video["video_id"]
         with self.db.transaction() as conn:
@@ -240,19 +264,20 @@ class Downloader:
                 conn.execute("UPDATE videos SET state='pending',running_since=NULL WHERE video_id=?", (vid,))
             degradable = failure if failure and failure.category == Category.DEGRADABLE_POSTPROCESS else None
             _, events = finish_attempt(conn, self.breakers, attempt, run, "ok" if eligible else "skipped",
-                                       degradable, cookie_id)
+                                       degradable, cookie_id, cookie_updated_at=cookie_updated_at)
             return events
 
     async def record_failure(
-        self, video: sqlite3.Row, source_id: int, cookie_id: int | None, attempt: int,
-        run: RunResult, failure: Classification,
+        self, video: sqlite3.Row, source_id: int, cookie_id: int | None, cookie_updated_at: str | None,
+        attempt: int, run: RunResult, failure: Classification,
     ) -> None:
         vid = video["video_id"]
         with self.db.transaction() as conn:
             if run.probe.get("id") == vid:
                 upsert_video(conn, run.probe)
             outcome = "deferred" if failure.category == Category.NOT_READY else "error"
-            classified, events = finish_attempt(conn, self.breakers, attempt, run, outcome, failure, cookie_id)
+            classified, events = finish_attempt(conn, self.breakers, attempt, run, outcome, failure, cookie_id,
+                                                cookie_updated_at=cookie_updated_at)
             assert classified is not None
             alternate = classified.category == Category.AUTH_REQUIRED and any(
                 row["id"] != source_id and row["cookie_profile_id"]
@@ -264,6 +289,7 @@ class Downloader:
             decision = plan_retry(
                 self.config.retry, video, classified, alternate_source=alternate,
                 release=run.gate.get("release_timestamp") or run.probe.get("release_timestamp"),
+                live_status=run.probe.get("live_status") or run.gate.get("reason"),
             )
             conn.execute(
                 """UPDATE videos SET state=?,next_attempt_at=?,category_attempts_json=?,unclassified=?,

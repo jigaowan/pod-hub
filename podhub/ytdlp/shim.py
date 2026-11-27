@@ -477,14 +477,17 @@ def run(request: dict[str, Any]) -> int:
             for section in request["extractor_args"].split("|"):
                 extractor, arguments = section.split(":", 1)
                 extractor_args[extractor.strip().lower()] = {
-                    key.strip().lower(): value.split(",") if equals else []
+                    key.strip().lower(): value.split(",") if equals else [""]
                     for option in arguments.split(";")
                     for key, equals, value in [option.partition("=")]
                     if key.strip()
                 }
         if listing:
-            extractor_args.setdefault("youtubetab", {}).setdefault("approximate_date", [])
-            params.update(extract_flat="in_playlist", lazy_playlist=True, playlistend=request.get("limit"))
+            extractor_args.setdefault("youtubetab", {}).setdefault("approximate_date", [""])
+            start = max(1, int(request.get("start") or 1))
+            limit = request.get("limit")
+            playlistend = (start + int(limit) - 1) if limit else None
+            params.update(extract_flat="in_playlist", lazy_playlist=True, playliststart=start, playlistend=playlistend)
         if request["mode"] == "resolve":
             params["playlist_items"] = "0"
         params["extractor_args"] = extractor_args
@@ -519,10 +522,11 @@ def run(request: dict[str, Any]) -> int:
                 emit("result", **resolve(raw, request["kind"]))
                 return 0
             if request["mode"] == "list":
-                for position, entry in enumerate(flat_entries(raw), 1):
-                    if request.get("limit") and position > request["limit"]:
+                start = max(1, int(request.get("start") or 1))
+                for index, entry in enumerate(flat_entries(raw), 1):
+                    if request.get("limit") and index > request["limit"]:
                         break
-                    emit("entry", **picked(entry), sort_key=position)
+                    emit("entry", **picked(entry), sort_key=start + index - 1)
                 return 0
             info = picked(raw)
             info["formats_count"] = len(raw.get("formats") or [])

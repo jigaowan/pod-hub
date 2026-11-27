@@ -72,6 +72,11 @@ def classify(run: RunResult, *, used_cookie: bool = False, minimum: str = "2025.
         return rule(Category.PERMANENT_UNAVAILABLE, retry=False)
     if any(text in message for text in (
         "members-only", "join this channel", "available to this channel's members", "available to youtube premium members",
+    )):
+        if used_cookie and any(text in message or text in warnings for text in COOKIE_ERRORS):
+            return rule(Category.COOKIE_INVALID, Scope.COOKIE, Confidence.HIGH)
+        return rule(Category.AUTH_REQUIRED, retry=False)
+    if any(text in message for text in (
         "confirm your age", "sign in", "login required", "authentication required",
     )):
         if used_cookie:

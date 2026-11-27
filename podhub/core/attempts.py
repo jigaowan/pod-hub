@@ -22,6 +22,7 @@ def interrupt_attempt(conn: sqlite3.Connection, breakers: Breakers, attempt: int
 def finish_attempt(
     conn: sqlite3.Connection, breakers: Breakers, attempt: int, run: RunResult, outcome: str,
     failure: Classification | None = None, cookie_id: int | None = None,
+    cookie_updated_at: str | None = None,
 ) -> tuple[Classification | None, list[Transition]]:
     ended = stamp()
     conn.execute(
@@ -33,6 +34,10 @@ def finish_attempt(
          run.error.get("http_status"), failure.reason if failure else None, json.dumps(run.warnings),
          run.version, run.bytes_downloaded, run.avg_bps, attempt),
     )
+    cookie_stale = False
+    if cookie_id is not None and cookie_updated_at is not None:
+        row = conn.execute("SELECT updated_at FROM cookie_profiles WHERE id=?", (cookie_id,)).fetchone()
+        cookie_stale = row is None or row["updated_at"] != cookie_updated_at
     transitions = []
     key = None
     if failure and outcome != "ok":
@@ -42,21 +47,23 @@ def finish_attempt(
             (failure.category, failure.scope, failure.confidence, attempt),
         )
         if failure.scope == Scope.COOKIE and cookie_id:
-            key = f"cookie:{cookie_id}"
+            if not cookie_stale:
+                key = f"cookie:{cookie_id}"
         elif failure.scope not in (Scope.VIDEO, Scope.COOKIE):
             key = failure.scope
         if key and (event := breakers.trip(conn, key, failure, run.version)):
             transitions.append(event)
-    if cookie_id and outcome == "ok":
+    if cookie_id and outcome == "ok" and not cookie_stale:
         conn.execute(
             "UPDATE cookie_profiles SET last_ok_at=? WHERE id=? AND status IN ('active','suspect')",
             (ended, cookie_id),
         )
+    used_toolchain = bool(run.version)
     if outcome in ("ok", "deferred") or (outcome == "skipped" and run.probe):
-        transitions.extend(breakers.complete_probe(conn, attempt, key))
+        transitions.extend(breakers.complete_probe(conn, attempt, key, used_toolchain=used_toolchain))
     elif run.error.get("http_status") not in (429, 403) and failure and failure.category in (
         Category.PERMANENT_UNAVAILABLE, Category.SOFT_UNAVAILABLE, Category.AUTH_REQUIRED,
     ):
-        transitions.extend(breakers.complete_probe(conn, attempt, key))
+        transitions.extend(breakers.complete_probe(conn, attempt, key, used_toolchain=used_toolchain))
     breakers.release(conn, attempt)
     return failure, transitions

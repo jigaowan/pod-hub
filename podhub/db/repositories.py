@@ -63,14 +63,16 @@ def upsert_video(conn: sqlite3.Connection, info: dict[str, Any]) -> None:
 
 def activate_video(
     conn: sqlite3.Connection, config: Config, video_id: str, priority: int, *, retry: bool = False,
+    allow_auth_recovery: bool = False,
 ) -> None:
     now = utc_now()
+    deadline = stamp(now, seconds=config.retry.give_up_after_days * 86400)
     if retry:
         conn.execute(
             """UPDATE videos SET state='pending', priority=?, next_attempt_at=NULL, running_since=NULL,
                give_up_at=?, attempt_count=0, category_attempts_json='{}', unclassified=0, updated_at=?
                WHERE video_id=? AND state NOT IN ('ready','running')""",
-            (priority, stamp(now, seconds=config.retry.give_up_after_days * 86400), stamp(now), video_id),
+            (priority, deadline, stamp(now), video_id),
         )
     else:
         conn.execute(
@@ -78,8 +80,15 @@ def activate_video(
                priority=CASE WHEN give_up_at IS NULL THEN ? ELSE max(priority,?) END,
                give_up_at=coalesce(give_up_at,?), updated_at=?
                WHERE video_id=? AND state IN ('pending','purged')""",
-            (priority, priority, stamp(now, seconds=config.retry.give_up_after_days * 86400), stamp(now), video_id),
+            (priority, priority, deadline, stamp(now), video_id),
         )
+        if allow_auth_recovery:
+            conn.execute(
+                """UPDATE videos SET state='pending', priority=max(priority,?), next_attempt_at=NULL,
+                   give_up_at=?, updated_at=?
+                   WHERE video_id=? AND state='unavailable' AND last_category='auth_required'""",
+                (priority, deadline, stamp(now), video_id),
+            )
 
 
 def expire_deadlines(conn: sqlite3.Connection, now: str) -> None:

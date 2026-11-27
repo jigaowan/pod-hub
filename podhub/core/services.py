@@ -29,7 +29,7 @@ from podhub.errors.breaker import Breakers
 from podhub.errors.taxonomy import classify
 from podhub.postprocess.registry import PostProcessorRegistry
 from podhub.postprocess.worker import PostprocessWorker
-from podhub.storage.cookies import copy_cookie, expiry, save_cookie
+from podhub.storage.cookies import copy_cookie, expiry, has_youtube_auth_cookie, save_cookie
 from podhub.storage.media import save_cover
 from podhub.storage.paths import (
     FOLDER_NAME_MAX_BYTES,
@@ -212,7 +212,7 @@ class Services:
                         if conn.execute("SELECT 1 FROM sources WHERE id=? AND slug=?", (source_id, slug)).fetchone():
                             filename = save_cover(jpg, self.config.paths.output_dir, slug)
                             conn.execute("UPDATE sources SET cover_filename=?,updated_at=? WHERE id=?", (filename, stamp(), source_id))
-        except (httpx.HTTPError, OSError, ValueError, TimeoutError):
+        except (httpx.HTTPError, ImportError, OSError, ValueError, TimeoutError):
             return
 
     def update_source(
@@ -291,9 +291,10 @@ class Services:
                 if folder.is_dir():
                     shutil.rmtree(folder)
             conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
-            conn.execute("DELETE FROM meta WHERE key IN (?,?,?)",
-                         (f"last_deep:{source_id}", f"force_deep:{source_id}", f"atom_variant:{source_id}"))
-            purge_unlinked(conn)
+            conn.execute("DELETE FROM meta WHERE key IN (?,?,?,?)",
+                         (f"last_deep:{source_id}", f"force_deep:{source_id}",
+                          f"backfill_cursor:{source_id}", f"atom_variant:{source_id}"))
+            purge_unlinked(conn, self.config)
 
     def want(self, conn: sqlite3.Connection, sid: int, vid: str, priority: int, *, manual: bool = False) -> None:
         from_state = "('candidate','filtered','wanted')" if manual else "('candidate','wanted')"
@@ -457,10 +458,13 @@ class Services:
         try:
             with TemporaryDirectory(dir=self.config.paths.state_dir / "tmp") as work:
                 isolated = copy_cookie(self.config.paths.state_dir / "cookies", cookie["file_path"], Path(work))
-                run = await self.runner.run("probe", url=canonical_video(vid), cookiefile=isolated)
-                self.discovery.check_version(run)
-                if not run.error and run.probe.get("id") != vid:
-                    run.error = {"msg": "cookie probe did not return the expected video"}
+                if not has_youtube_auth_cookie(isolated.read_text(encoding="utf-8", errors="replace")):
+                    run.error = {"msg": "Cookie file contains no YouTube login session cookies; cookies are invalid"}
+                else:
+                    run = await self.runner.run("probe", url=canonical_video(vid), cookiefile=isolated)
+                    self.discovery.check_version(run)
+                    if not run.error and run.probe.get("id") != vid:
+                        run.error = {"msg": "cookie probe did not return the expected video"}
         except asyncio.CancelledError:
             with self.db.transaction() as conn:
                 interrupt_attempt(conn, self.breakers, attempt, "Cookie validation interrupted")
@@ -475,7 +479,8 @@ class Services:
                 interrupt_attempt(conn, self.breakers, attempt, "Cookie profile changed")
                 return False
             _, events = finish_attempt(conn, self.breakers, attempt, run, "ok" if valid else "error",
-                                       None if valid else classification, cookie_id)
+                                       None if valid else classification, cookie_id,
+                                       cookie_updated_at=cookie["updated_at"])
             if valid:
                 conn.execute("UPDATE cookie_profiles SET status='active',last_ok_at=?,updated_at=? WHERE id=?", (stamp(), stamp(), cookie_id))
                 if event := self.breakers.reset(conn, f"cookie:{cookie_id}"):

@@ -74,8 +74,13 @@ class PostprocessWorker:
                 files = []
                 for result in results:
                     destination = safe_path(self.paths.output_dir, result.rel_path)
-                    if destination.parent != output or not result.kind or not result.mime_type:
-                        raise ValueError("artifact must belong to the source's artifacts folder")
+                    if (
+                        destination.parent != output
+                        or not destination.name.startswith(f"{task['video_id']}.")
+                        or not result.kind
+                        or not result.mime_type
+                    ):
+                        raise ValueError("artifact must belong to the source's artifacts folder and be prefixed with video_id.")
                     origin = safe_path(staged, destination.name)
                     if not origin.is_file():
                         raise ValueError("processor did not create the declared artifact")
@@ -88,6 +93,17 @@ class PostprocessWorker:
                     if not current or current["state"] not in ("published", "retiring"):
                         conn.execute("UPDATE postprocess_tasks SET state='pending',updated_at=? WHERE id=?", (stamp(), task["id"]))
                         return
+                    for result, _, _ in files:
+                        owner = conn.execute(
+                            "SELECT video_id,source_id,kind FROM video_artifacts WHERE rel_path=?",
+                            (result.rel_path,),
+                        ).fetchone()
+                        if owner and (
+                            owner["video_id"] != task["video_id"]
+                            or owner["source_id"] != task["source_id"]
+                            or owner["kind"] != result.kind
+                        ):
+                            raise ValueError("artifact path is already owned by another episode or artifact kind")
                     for result, origin, destination in files:
                         atomic_publish(origin, destination)
                         conn.execute(

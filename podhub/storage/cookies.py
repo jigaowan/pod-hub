@@ -10,6 +10,28 @@ from podhub.storage.media import sync_directory
 from podhub.storage.paths import safe_path
 
 
+YOUTUBE_AUTH_COOKIES = frozenset({
+    "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO",
+    "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
+})
+
+
+def has_youtube_auth_cookie(contents: str) -> bool:
+    for line in contents.splitlines():
+        line = line.removeprefix("#HttpOnly_")
+        if not line or line.startswith("#"):
+            continue
+        columns = line.split("\t")
+        if len(columns) != 7:
+            continue
+        domain = columns[0].lstrip(".").lower()
+        name = columns[5].strip()
+        value = columns[6].strip()
+        if (domain == "youtube.com" or domain.endswith(".youtube.com") or domain == "google.com" or domain.endswith(".google.com")) and name in YOUTUBE_AUTH_COOKIES and value:
+            return True
+    return False
+
+
 def expiry(contents: str) -> str | None:
     if len(contents.encode()) > 2_000_000:
         raise ValueError("cookie file exceeds 2 MB")

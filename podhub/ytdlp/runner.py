@@ -58,12 +58,25 @@ async def stop_group(process: asyncio.subprocess.Process, *, grace: float = 5) -
                 return False
         return True
 
+    cancelled = False
     if send(signal.SIGTERM):
         deadline = monotonic() + grace
         while monotonic() < deadline and send(0):
-            await asyncio.sleep(min(0.05, max(0, deadline - monotonic())))
+            try:
+                await asyncio.sleep(min(0.05, max(0, deadline - monotonic())))
+            except asyncio.CancelledError:
+                cancelled = True
+                break
         send(signal.SIGKILL)
-    await process.wait()
+    while True:
+        try:
+            await process.wait()
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+            send(signal.SIGKILL)
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 class Runner:

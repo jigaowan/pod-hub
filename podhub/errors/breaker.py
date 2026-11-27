@@ -108,13 +108,15 @@ class Breakers:
         return Transition(key, "closed", row["reason_category"], row["reason_message"])
 
     def complete_probe(
-        self, conn: sqlite3.Connection, attempt: int, failed_key: str | None,
+        self, conn: sqlite3.Connection, attempt: int, failed_key: str | None, *, used_toolchain: bool = True,
     ) -> list[Transition]:
         events = []
         for row in conn.execute(
             """SELECT key FROM circuit_breakers WHERE state='half_open'
                AND json_extract(context_json,'$.probe_attempt')=?""", (attempt,),
         ).fetchall():
+            if row["key"] == "toolchain" and not used_toolchain:
+                continue
             if row["key"] != failed_key and (event := self.reset(conn, row["key"], manual=False)):
                 events.append(event)
         return events
