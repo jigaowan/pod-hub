@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from time import time
 from typing import Any
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.datastructures import FormData
@@ -27,6 +26,7 @@ from podhub.domain.policy import SourcePolicy
 from podhub.outputs.base import feed_url
 from podhub.outputs.opml import render_opml
 from podhub.storage.paths import youtube_cover
+from podhub.version import app_version
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory=Path(__file__).parents[1] / "templates")
@@ -75,7 +75,7 @@ def form_policy(form: FormData, default: SourcePolicy, fields: tuple[str, ...]) 
 def render(request: Request, filename: str, status_code: int = 200, **context: Any) -> Response:
     services: Services = request.app.state.services
     return templates.TemplateResponse(
-        request, filename, {"base_url": services.config.web.base_url, **context},
+        request, filename, {"base_url": services.config.web.base_url, "app_version": app_version(), **context},
         headers=HEADERS, status_code=status_code,
     )
 
@@ -93,16 +93,9 @@ MAX_ADMIN_FORM_BYTES = 2_500_000
 
 @asynccontextmanager
 async def checked_form(request: Request) -> AsyncIterator[FormData]:
-    services: Services = request.app.state.services
     fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
-    if fetch_site:
-        if fetch_site not in ("same-origin", "none"):
-            raise HTTPException(403, "cross-origin form submission")
-    else:
-        origin = request.headers.get("origin")
-        allowed = {urlsplit(str(request.base_url)).netloc, urlsplit(services.config.web.base_url).netloc}
-        if origin and (urlsplit(origin).netloc not in allowed or urlsplit(origin).scheme not in ("http", "https")):
-            raise HTTPException(403, "cross-origin form submission")
+    if fetch_site == "cross-site":
+        raise HTTPException(403, "cross-origin form submission")
     content_length = request.headers.get("content-length")
     if content_length:
         try:

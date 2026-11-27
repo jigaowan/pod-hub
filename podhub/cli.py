@@ -15,10 +15,12 @@ from podhub.core.services import NotFound, Services
 from podhub.domain.enums import Category, SourceKind
 from podhub.domain.policy import SourcePolicy
 from podhub.main import create_app
+from podhub.version import app_version
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pod-hub")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {app_version()}")
     parser.add_argument("--config", type=Path, help="path to config.toml")
     commands = parser.add_subparsers(dest="command", required=True)
 

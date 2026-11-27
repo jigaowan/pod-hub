@@ -18,10 +18,17 @@
         in python.withPackages (ps: [ (ps.toPythonModule package) ]);
     in
     {
-      packages = forSystems (pkgs: {
+      packages = forSystems (pkgs:
+        let
+          version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
+          buildVersion =
+            if self ? shortRev then "v${version}+${self.shortRev}"
+            else if self ? dirtyShortRev then "v${version}+${self.dirtyShortRev}"
+            else "v${version}";
+        in {
         default = pkgs.python312Packages.buildPythonApplication {
           pname = "pod-hub";
-          version = "2.0.1";
+          inherit version;
           pyproject = true;
           src = pkgs.lib.fileset.toSource {
             root = ./.;
@@ -36,6 +43,7 @@
           makeWrapperArgs = [
             "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.deno ])
             "--set-default" "PODHUB_DEFAULT_YTDLP_PYTHON" "${toolPython pkgs pkgs.yt-dlp}/bin/python3"
+            "--set-default" "PODHUB_BUILD_VERSION" buildVersion
           ];
           meta.mainProgram = "pod-hub";
         };

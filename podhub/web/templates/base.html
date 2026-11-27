@@ -13,7 +13,10 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="frame bar">
-    <a class="brand" href="/admin">Pod Hub</a>
+    <div class="brand-group">
+      <a class="brand" href="/admin">Pod Hub</a>
+      <span class="version" title="Pod Hub version">{{ app_version }}</span>
+    </div>
     <nav aria-label="Management">
       {% for key, label, url in [('overview','Overview','/admin'),('sources','Sources','/admin/sources'),('videos','Videos & Queue','/admin/videos'),('cookies','Cookies & Config','/admin/cookies')] %}
       <a href="{{ url }}" {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>

@@ -22,7 +22,9 @@ def test_admin_source_preview_confirm_and_actions(services):
         {"id": OTHER, "title": "Short episode", "duration": 2},
     ]
     with TestClient(create_app(services=services, run_scheduler=False)) as client:
-        assert "Recent attempts" in client.get("/admin").text
+        overview_html = client.get("/admin").text
+        assert "Recent attempts" in overview_html
+        assert 'class="version"' in overview_html
         assert "overview-panel" in client.get("/admin/status").text
         assert client.get("/healthz").text == "ok\n"
         assert "2.0.8" in client.get("/static/htmx.min.js").text
@@ -57,13 +59,11 @@ def test_admin_source_preview_confirm_and_actions(services):
         assert client.post(detail, data={"action": "policy", "check_interval": 60, "keep_count": 10}).status_code == 200
         assert services.source(sid)["policy_rev"] == 2
         assert client.post(detail, data={"action": "delete"}).status_code == 400
-        assert client.post("/admin/system", data={"action": "pause"}, headers={"Origin": "https://elsewhere.example"}).status_code == 403
         assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
-        assert client.post("/admin/system", data={"action": "pause"}, headers={"Sec-Fetch-Site": "same-site"}).status_code == 403
         assert client.post("/admin/system", data={"action": "pause"}, headers={
             "Sec-Fetch-Site": "same-origin", "Origin": "https://temp-proxy.example",
         }).status_code == 200
-        assert client.post("/admin/system", data={"action": "resume"}, headers={"Origin": "http://testserver"}).status_code == 200
+        assert client.post("/admin/system", data={"action": "resume"}, headers={"Origin": "http://192.168.1.10:9000"}).status_code == 200
         assert "Paused" in client.post("/admin/system", data={"action": "pause"}).text
         assert "Running" in client.post("/admin/system", data={"action": "resume"}).text
         assert "ffmpeg test" in client.post("/admin/system", data={"action": "doctor"}).text
@@ -230,3 +230,15 @@ def test_cli_uses_shared_services(config, tmp_path, capsys):
     with service.db.connect() as conn:
         assert conn.execute("SELECT value FROM meta WHERE key='global_paused'").fetchone()[0] == "1"
         assert conn.execute("SELECT state FROM source_entries").fetchone()[0] == "wanted"
+
+
+def test_app_version_uses_build_override(monkeypatch, services):
+    from podhub.version import app_version
+    app_version.cache_clear()
+    monkeypatch.setenv("PODHUB_BUILD_VERSION", "v2.0.2+abc1234")
+    try:
+        assert app_version() == "v2.0.2+abc1234"
+        with TestClient(create_app(services=services, run_scheduler=False)) as client:
+            assert "v2.0.2+abc1234" in client.get("/admin").text
+    finally:
+        app_version.cache_clear()

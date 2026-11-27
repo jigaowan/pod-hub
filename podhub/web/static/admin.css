@@ -36,7 +36,9 @@ a { color: var(--primary); text-underline-offset: .2em; }
 .topbar { background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar, .section-head, .status-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
 .bar { min-height: 4rem; padding-block: .5rem; }
+.brand-group { display: flex; align-items: baseline; gap: .5rem; }
 .brand { font-size: 1.25rem; font-weight: 750; text-decoration: none; }
+.version { font-size: .78rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .08rem .45rem; }
 nav { display: flex; gap: .25rem; flex-wrap: wrap; align-items: center; }
 nav a { border-radius: .4rem; padding: .5rem .65rem; text-decoration: none; color: var(--ink); }
 nav a:hover, nav a[aria-current] { color: var(--primary); background: var(--soft-primary); }
