@@ -98,3 +98,18 @@ dialog::backdrop { background: #0008; }
 .skip-link:focus { top: 1rem; }
 .pagination { margin-top: .7rem; }
 .cover-preview { display: block; object-fit: cover; border-radius: .4rem; margin-block: .6rem; }
+.settings-groups { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.setting-group { margin: 0; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--background); display: grid; gap: .75rem; align-content: start; }
+.setting-group legend { padding-inline: .35rem; font-size: .85rem; font-weight: 700; color: var(--muted); }
+.setting-group input, .setting-group select { background: var(--panel); }
+.check-row { display: flex; flex-wrap: wrap; gap: .55rem 1.15rem; }
+.field-block { display: grid; gap: .35rem; }
+.field-title { font-size: .92rem; font-weight: 600; }
+.range-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: .5rem; align-items: end; }
+.range-sep { color: var(--muted); padding-bottom: .5rem; }
+.pair-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+.field-sub { display: grid; gap: .22rem; font-size: .82rem; font-weight: 500; color: var(--muted); }
+.field-hint { font-size: .8rem; color: var(--muted); margin: 0; }
+.help-box { padding: .75rem .95rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--background); font-size: .9rem; }
+.help-box ol { margin: .45rem 0 0; padding-left: 1.25rem; display: grid; gap: .3rem; }
+.help-box code { font-size: .85em; }

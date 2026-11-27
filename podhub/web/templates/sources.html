@@ -18,7 +18,7 @@
       </label>
       {{ profile_select(cookies, profile) }}
     </div>
-    <details><summary>Initial filters</summary><div class="form-grid">{{ filter_fields(policy) }}</div></details>
+    <details><summary>Initial filters</summary><div class="settings-groups">{{ filter_fields(policy) }}</div></details>
     <button class="fit">Preview</button>
   </form>
   <div id="preview" aria-live="polite">{% if preview %}{% include "source_preview.html" %}{% endif %}</div>

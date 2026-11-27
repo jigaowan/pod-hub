@@ -23,13 +23,33 @@
 {% endmacro %}
 
 {% macro filter_fields(policy) %}
-<label class="check"><input type="checkbox" name="fetch_history" {% if policy.fetch_history %}checked{% endif %}> Fetch history</label>
-<label class="check"><input type="checkbox" name="include_shorts" {% if policy.include_shorts %}checked{% endif %}> Include Shorts</label>
-<label class="check"><input type="checkbox" name="include_live_archives" {% if policy.include_live_archives %}checked{% endif %}> Include live archives</label>
-<label>Minimum duration (seconds) <input type="number" name="min_duration_s" min="0" value="{{ policy.min_duration_s }}" required></label>
-<label>Maximum duration (0 = unlimited) <input type="number" name="max_duration_s" min="0" value="{{ policy.max_duration_s }}" required></label>
-<label>Include title pattern <input name="title_include_regex" value="{{ policy.title_include_regex }}" maxlength="256"></label>
-<label>Exclude title pattern <input name="title_exclude_regex" value="{{ policy.title_exclude_regex }}" maxlength="256"></label>
+<fieldset class="setting-group">
+  <legend>History &amp; Content</legend>
+  <div class="check-row">
+    <label class="check"><input type="checkbox" name="fetch_history" {% if policy.fetch_history %}checked{% endif %}> Fetch history</label>
+    <label class="check"><input type="checkbox" name="include_shorts" {% if policy.include_shorts %}checked{% endif %}> Include Shorts</label>
+    <label class="check"><input type="checkbox" name="include_live_archives" {% if policy.include_live_archives %}checked{% endif %}> Include live archives</label>
+  </div>
+</fieldset>
+<fieldset class="setting-group">
+  <legend>Content Filters</legend>
+  <div class="field-block">
+    <span class="field-title">Duration (seconds)</span>
+    <div class="range-row">
+      <label class="field-sub">Min <input type="number" name="min_duration_s" min="0" value="{{ policy.min_duration_s }}" required></label>
+      <span class="range-sep" aria-hidden="true">–</span>
+      <label class="field-sub">Max <input type="number" name="max_duration_s" min="0" value="{{ policy.max_duration_s }}" required></label>
+    </div>
+    <p class="field-hint">Set Max to 0 for no upper limit.</p>
+  </div>
+  <div class="field-block">
+    <span class="field-title">Title pattern (regex)</span>
+    <div class="pair-row">
+      <label class="field-sub">Include <input name="title_include_regex" value="{{ policy.title_include_regex }}" maxlength="256" placeholder="Optional"></label>
+      <label class="field-sub">Exclude <input name="title_exclude_regex" value="{{ policy.title_exclude_regex }}" maxlength="256" placeholder="Optional"></label>
+    </div>
+  </div>
+</fieldset>
 {% endmacro %}
 
 {% macro attempts_table(attempts, detail=false) %}

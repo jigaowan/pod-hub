@@ -51,6 +51,8 @@ def test_admin_source_preview_confirm_and_actions(services):
         detail = confirm.headers["location"]
         panel = client.get(detail)
         assert panel.status_code == 200
+        assert "Add Single Video" not in panel.text
+        assert "History &amp; Content" in panel.text and "Content Filters" in panel.text and "Retention" in panel.text
         assert "Keep files on disk" in panel.text and "Delete source folder on disk" in panel.text
         sid = int(detail.rsplit("/", 1)[1])
         assert services.source(sid)["external_id"] == CHANNEL
@@ -176,6 +178,7 @@ async def test_cookies_create_update_expire_validate_and_delete(services, source
         assert create.status_code == 200
         assert "sample-cookie-secret" not in create.text
         assert "Effective configuration" in create.text
+        assert "youtube.com/robots.txt" in create.text
         row = services.cookies()[0]
         cookie_id = row["id"]
         services.update_source(bound, services.config.defaults, cookie_id, 1800)

@@ -16,7 +16,19 @@
 {% if validated in ['ok', 'failed'] %}
 <p role="status" class="panel">{{ 'Cookie validated.' if validated == 'ok' else 'Cookie validation failed. See Recent attempts on the Overview.' }}</p>
 {% endif %}
-<section class="panel"><h2>Create Cookie Profile</h2>{{ editor() }}</section>
+<section class="panel stack">
+  <h2>Create Cookie Profile</h2>
+  <div class="help-box">
+    <strong>How to get YouTube cookies (Netscape format)</strong>
+    <ol>
+      <li>Open a private/incognito browser window and sign in to YouTube (a dedicated account is recommended).</li>
+      <li>Open <code>https://www.youtube.com/robots.txt</code> in the same tab so YouTube stops rotating session cookies on active pages.</li>
+      <li>Export <code>cookies.txt</code> in Netscape format using a browser extension (e.g. <em>Get cookies.txt LOCALLY</em>), or locally via <code>yt-dlp --cookies-from-browser chrome --cookies cookies.txt --skip-download "https://www.youtube.com/"</code>.</li>
+      <li>Close the private window without signing out, paste the exported text below, save, then click <strong>Validate Cookie</strong>.</li>
+    </ol>
+  </div>
+  {{ editor() }}
+</section>
 <section class="panel stack">
   <h2>Cookie profiles</h2>
   {% for row in rows %}

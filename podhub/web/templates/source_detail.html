@@ -19,34 +19,36 @@
   {{ action(url,'rotate','Rotate Token',variant='secondary') }}
   {% if source.last_error_message %}<p class="warn-text wrap">{{ source.last_error_message }}</p>{% endif %}
 </section>
-<section class="panel">
-  <h2>Add Single Video</h2>
-  <form method="post" action="{{ url }}" class="control-row">
+<section class="panel stack">
+  <h2>Source settings</h2>
+  <form method="post" action="{{ url }}" class="stack">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>YouTube video URL or ID <input name="video" required></label>
-    <button name="action" value="add-video">Add Video</button>
-  </form>
-</section>
-<section class="panel">
-  <details>
-    <summary>Source settings</summary>
-    <form method="post" action="{{ url }}" class="stack">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="form-grid">
-        {{ filter_fields(policy) }}
-        <label>Keep count (0 = unlimited) <input name="keep_count" type="number" min="0" value="{{ policy.keep_count }}" required></label>
-        <label>Keep days (0 = forever) <input name="keep_days" type="number" min="0" value="{{ policy.keep_days }}" required></label>
+    <div class="settings-groups">
+      {{ filter_fields(policy) }}
+      <fieldset class="setting-group">
+        <legend>Retention</legend>
+        <div class="field-block">
+          <span class="field-title">Keep limits</span>
+          <div class="pair-row">
+            <label class="field-sub">Max episodes <input name="keep_count" type="number" min="0" value="{{ policy.keep_count }}" required></label>
+            <label class="field-sub">Max age (days) <input name="keep_days" type="number" min="0" value="{{ policy.keep_days }}" required></label>
+          </div>
+          <p class="field-hint">0 = keep all episodes / keep forever.</p>
+        </div>
+      </fieldset>
+      <fieldset class="setting-group">
+        <legend>Access &amp; Feed</legend>
+        {{ profile_select(cookies, source.cookie_profile_id) }}
         {% if source.kind in ['playlist', 'manual'] %}
         <label>Feed order <select name="feed_order">
           <option value="published_desc" {% if policy.feed_order == 'published_desc' %}selected{% endif %}>Newest published first</option>
           <option value="playlist_serial" {% if policy.feed_order == 'playlist_serial' %}selected{% endif %}>Playlist serial</option>
         </select></label>
         {% endif %}
-        {{ profile_select(cookies, source.cookie_profile_id) }}
-      </div>
-      <button name="action" value="policy" class="fit">Save Settings</button>
-    </form>
-  </details>
+      </fieldset>
+    </div>
+    <button name="action" value="policy" class="fit">Save Settings</button>
+  </form>
 </section>
 <section class="panel">
   <h2>Episodes</h2>
